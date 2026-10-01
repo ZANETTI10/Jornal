@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Jornal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<!--CUERPO-->
+<div id="pantalla-login" class="login" hidden>
+  <form id="form-login" class="login-caja">
+    <div class="marca"><span class="marca-sello">J</span><div><strong>Jornal</strong><small>Nómina y asistencia · Soporte TI</small></div></div>
+    <p id="login-empresa" class="login-empresa" hidden></p>
+    <label for="login-email">Correo</label>
+    <input id="login-email" type="email" autocomplete="username" required>
+    <label for="login-clave">Contraseña</label>
+    <input id="login-clave" type="password" autocomplete="current-password" required>
+    <p id="login-error" class="error" hidden></p>
+    <button class="btn btn-primario" type="submit">Entrar</button>
+    <p class="nota">Los usuarios se crean en Supabase → Authentication → Users.</p>
+  </form>
+</div>
+
+<div id="app" class="app" hidden>
+  <header class="barra">
+    <div class="marca"><span class="marca-sello">J</span><div><strong>Jornal</strong><small>Nómina y asistencia</small></div></div>
+    <div class="barra-empresa">
+      <label for="sel-empresa" class="eyebrow">Empresa</label>
+      <select id="sel-empresa"></select>
+    </div>
+    <div class="barra-usuario">
+      <span id="chip-demo" class="chip chip-aviso" hidden>Modo demo · datos de ejemplo</span>
+      <span id="usuario-nombre" class="usuario"></span>
+      <button id="btn-salir" class="btn btn-fantasma" type="button">Salir</button>
+    </div>
+  </header>
+
+  <nav class="pestanas" role="tablist">
+    <button role="tab" data-vista="liquidacion" class="activa">Liquidación</button>
+    <button role="tab" data-vista="asistencia">Asistencia</button>
+    <button role="tab" data-vista="empleados">Empleados</button>
+    <button role="tab" data-vista="novedades">Novedades</button>
+    <button role="tab" data-vista="empresas">Empresas</button>
+    <button role="tab" data-vista="parametros">Parámetros legales</button>
+  </nav>
+
+  <main class="contenido">
+    <!-- LIQUIDACIÓN -->
+    <section id="vista-liquidacion" class="vista">
+      <div class="controles">
+        <div class="campo"><label for="liq-mes">Mes</label><input id="liq-mes" type="month"></div>
+        <div class="campo"><label for="liq-tramo">Periodo</label>
+          <select id="liq-tramo"><option value="q1">1ª quincena</option><option value="q2">2ª quincena</option><option value="mes">Mes completo</option></select></div>
+        <div class="campo campo-rango"><span class="eyebrow">Fechas</span><span id="liq-rango" class="mono"></span></div>
+        <div class="acciones">
+          <button id="btn-calcular" class="btn btn-primario" type="button">Calcular nómina</button>
+          <button id="btn-excel" class="btn" type="button" disabled>Exportar a Excel</button>
+          <button id="btn-cerrar" class="btn" type="button" disabled>Cerrar periodo</button>
+        </div>
+      </div>
+      <div id="liq-estado" class="estado-periodo" hidden></div>
+      <div id="liq-resumen" class="resumen"></div>
+      <div id="liq-vacio" class="vacio">
+        <h2>Elige el periodo y calcula</h2>
+        <p>Jornal toma las marcaciones del biométrico, arma los turnos, separa horas ordinarias, recargos y extras según la norma vigente cada día, y liquida devengos, deducciones, aportes y provisiones.</p>
+      </div>
+      <div class="tabla-envoltura"><table id="tabla-liq" class="tabla" hidden></table></div>
+      <aside id="detalle" class="detalle" hidden></aside>
+    </section>
+
+    <!-- ASISTENCIA -->
+    <section id="vista-asistencia" class="vista" hidden>
+      <div class="dos-columnas">
+        <div class="panel">
+          <h2>Importar del biométrico</h2>
+          <p class="nota">El reporte de marcaciones que exporta el reloj: Excel (<span class="mono">.xls</span>, como el "TransactionsReport" de ZKTeco), CSV/TXT o <span class="mono">attlog.dat</span>. Las marcaciones repetidas se ignoran, así que puedes subir el mismo archivo varias veces.</p>
+          <input id="archivo-bio" type="file" accept=".xls,.xlsx,.dat,.txt,.csv,.tsv">
+          <div id="import-previa" class="previa" hidden></div>
+          <button id="btn-importar" class="btn btn-primario" type="button" hidden>Guardar marcaciones</button>
+        </div>
+        <div class="panel">
+          <h2>Marcación manual</h2>
+          <p class="nota">Para olvidos de marcación. Queda registrada como manual.</p>
+          <form id="form-manual" class="form-fila">
+            <div class="campo"><label for="man-empleado">Empleado</label><select id="man-empleado" required></select></div>
+            <div class="campo"><label for="man-fecha">Fecha y hora</label><input id="man-fecha" type="datetime-local" required></div>
+            <div class="campo"><label for="man-obs">Motivo</label><input id="man-obs" type="text" placeholder="Olvidó marcar salida"></div>
+            <button class="btn" type="submit">Agregar</button>
+          </form>
+        </div>
+      </div>
+      <div class="controles">
+        <div class="campo"><label for="asis-desde">Desde</label><input id="asis-desde" type="date"></div>
+        <div class="campo"><label for="asis-hasta">Hasta</label><input id="asis-hasta" type="date"></div>
+        <div class="campo"><label for="asis-empleado">Empleado</label><select id="asis-empleado"></select></div>
+        <div class="acciones"><button id="btn-ver-asis" class="btn" type="button">Ver turnos</button></div>
+      </div>
+      <div class="tabla-envoltura"><table id="tabla-asis" class="tabla"></table></div>
+    </section>
+
+    <!-- EMPLEADOS -->
+    <section id="vista-empleados" class="vista" hidden>
+      <div class="encabezado-vista"><h2>Empleados</h2><button id="btn-nuevo-empleado" class="btn btn-primario" type="button">Agregar empleado</button></div>
+      <div class="tabla-envoltura"><table id="tabla-empleados" class="tabla"></table></div>
+    </section>
+
+    <!-- NOVEDADES -->
+    <section id="vista-novedades" class="vista" hidden>
+      <div class="encabezado-vista"><h2>Novedades</h2><button id="btn-nueva-novedad" class="btn btn-primario" type="button">Agregar novedad</button></div>
+      <p class="nota">Bonificaciones, descuentos, préstamos, incapacidades, licencias y vacaciones. Entran a la liquidación del periodo que contenga su fecha.</p>
+      <div class="tabla-envoltura"><table id="tabla-novedades" class="tabla"></table></div>
+    </section>
+
+    <!-- EMPRESAS -->
+    <section id="vista-empresas" class="vista" hidden>
+      <div class="encabezado-vista"><h2>Empresas cliente</h2><button id="btn-nueva-empresa" class="btn btn-primario" type="button">Agregar empresa</button></div>
+      <div class="tabla-envoltura"><table id="tabla-empresas" class="tabla"></table></div>
+    </section>
+
+    <!-- PARÁMETROS -->
+    <section id="vista-parametros" class="vista" hidden>
+      <div class="encabezado-vista"><h2>Parámetros legales</h2><button id="btn-nuevo-parametro" class="btn btn-primario" type="button">Agregar vigencia</button></div>
+      <p class="nota">Cada fila rige desde su fecha hasta que empieza la siguiente. Para un cambio de ley o el salario mínimo del próximo año, agrega una vigencia nueva; no edites las anteriores, porque recalcularían periodos ya pagados.</p>
+      <div class="tabla-envoltura"><table id="tabla-parametros" class="tabla"></table></div>
+      <h3>Festivos del año</h3>
+      <div id="lista-festivos" class="festivos"></div>
+    </section>
+  </main>
+</div>
+
+<dialog id="dialogo" class="dialogo">
+  <form id="dialogo-form" method="dialog">
+    <h2 id="dialogo-titulo"></h2>
+    <div id="dialogo-campos" class="dialogo-campos"></div>
+    <p id="dialogo-error" class="error" hidden></p>
+    <div class="dialogo-acciones">
+      <button id="dialogo-eliminar" class="btn btn-peligro" type="button" hidden>Eliminar</button>
+      <span class="espacio"></span>
+      <button id="dialogo-cancelar" class="btn btn-fantasma" type="button">Cancelar</button>
+      <button id="dialogo-guardar" class="btn btn-primario" type="submit">Guardar</button>
+    </div>
+  </form>
+</dialog>
+<div id="aviso" class="aviso" role="status" hidden></div>
+<!--/CUERPO-->
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="config.js"></script>
+<script src="calculo.js"></script>
+<script src="datos.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

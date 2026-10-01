@@ -1,0 +1,686 @@
+/* =====================================================================
+   JORNAL · Interfaz
+   ===================================================================== */
+(function () {
+  'use strict';
+  const db = window.JornalDatos;
+  const C = window.JornalCalc;
+  const $ = (s) => document.querySelector(s);
+  const $$ = (s) => [...document.querySelectorAll(s)];
+  const pesos = new Intl.NumberFormat('es-CO', { style: 'currency', currency: 'COP', maximumFractionDigits: 0 });
+  const $f = (v) => pesos.format(Math.round(+v || 0));
+  const h2 = (v) => (+v || 0).toLocaleString('es-CO', { maximumFractionDigits: 2 });
+  const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const MESES = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio', 'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+  const DIAS = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];
+  const fechaLarga = (iso) => { const d = C.aFecha(iso); return `${DIAS[d.getUTCDay()]} ${d.getUTCDate()} ${MESES[d.getUTCMonth()].slice(0, 3)}`; };
+
+  const SLUG = (new URLSearchParams(location.search).get('empresa') || '').trim().toLowerCase();
+  const esStaff = () => estado.perfil && (estado.perfil.rol === 'admin' || estado.perfil.rol === 'tecnico');
+  const esAdmin = () => estado.perfil && estado.perfil.rol === 'admin';
+  const enlaceEmpresa = (e) => `${location.origin}${location.pathname}?empresa=${encodeURIComponent(e.slug)}`;
+  const hacerSlug = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    .replace(/\(.*?\)/g, '').replace(/s\.?a\.?s\.?|ltda\.?/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  const estado = { perfil: null, empresas: [], empresaId: null, empleados: [], parametros: [], liquidacion: null, periodo: null, seleccionado: null };
+  const empresaActual = () => estado.empresas.find((e) => e.id === estado.empresaId);
+  const nombreEmpleado = (e) => (e ? `${e.nombres} ${e.apellidos || ''}`.trim() : 'Sin asignar');
+
+  function aviso(texto) {
+    const el = $('#aviso'); el.textContent = texto; el.hidden = false;
+    clearTimeout(aviso.t); aviso.t = setTimeout(() => { el.hidden = true; }, 3500);
+  }
+  async function intentar(fn) {
+    try { return await fn(); } catch (e) { console.error(e); aviso('No se pudo completar: ' + e.message); return undefined; }
+  }
+
+  // ------------------------------------------------------------------
+  // Arranque y sesión
+  // ------------------------------------------------------------------
+  async function iniciar() {
+    const sesion = await db.sesion();
+    if (!sesion) {
+      $('#pantalla-login').hidden = false; $('#app').hidden = true;
+      if (SLUG) {
+        try {
+          const [e] = (await db.rpc('empresa_por_slug', { p_slug: SLUG })) || [];
+          const el = $('#login-empresa');
+          el.textContent = e ? e.nombre : 'Este enlace no corresponde a ninguna empresa activa.';
+          el.hidden = false;
+        } catch (err) { /* sin nombre: el ingreso funciona igual */ }
+      }
+      return;
+    }
+    $('#pantalla-login').hidden = true; $('#app').hidden = false;
+    estado.perfil = await db.perfil();
+    const ROLES = { admin: 'Administrador', tecnico: 'Técnico', cliente: 'Empresa' };
+    $('#usuario-nombre').textContent = `${estado.perfil.nombre} · ${ROLES[estado.perfil.rol] || estado.perfil.rol}`;
+    $('#chip-demo').hidden = !db.demo;
+    $('#btn-salir').hidden = db.demo;
+    // Las empresas cliente no administran empresas ni parámetros legales
+    $$('[data-vista="empresas"], [data-vista="parametros"]').forEach((b) => { b.hidden = !esStaff(); });
+    estado.parametros = await db.listar('parametros_legales', { order: 'vigente_desde' });
+    await cargarEmpresas();
+    if (!estado.empresas.length) {
+      $('#liq-vacio').innerHTML = esStaff()
+        ? '<h2>Agrega tu primera empresa</h2><p>Ve a la pestaña Empresas y crea la empresa cliente. Luego importa el archivo de su biométrico en Asistencia.</p>'
+        : '<h2>Tu usuario todavía no tiene una empresa asignada</h2><p>Pídele a Soporte TI que te dé acceso a tu empresa.</p>';
+    }
+    prepararPeriodo();
+    mostrarVista('liquidacion');
+    if (db.demo) calcular();
+  }
+
+  $('#form-login').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    const err = $('#login-error'); err.hidden = true;
+    try { await db.entrar($('#login-email').value.trim(), $('#login-clave').value); iniciar(); }
+    catch (e) { err.textContent = 'Correo o contraseña incorrectos.'; err.hidden = false; }
+  });
+  $('#btn-salir').addEventListener('click', async () => { await db.salir(); location.reload(); });
+
+  async function cargarEmpresas() {
+    estado.empresas = await db.listar('empresas', { order: 'nombre' });
+    const sel = $('#sel-empresa');
+    sel.innerHTML = estado.empresas.length
+      ? estado.empresas.map((e) => `<option value="${e.id}">${esc(e.nombre)}</option>`).join('')
+      : '<option value="">Primero agrega una empresa</option>';
+    if (SLUG && !estado.empresaId) {
+      const porSlug = estado.empresas.find((e) => e.slug === SLUG);
+      if (porSlug) estado.empresaId = porSlug.id;
+      else if (estado.empresas.length) aviso('Tu usuario no tiene acceso a la empresa de este enlace.');
+    }
+    if (!estado.empresas.find((e) => e.id === estado.empresaId)) estado.empresaId = estado.empresas[0]?.id || null;
+    sel.value = estado.empresaId || '';
+    // Un usuario de empresa con una sola empresa no necesita el selector
+    sel.disabled = !esStaff() && estado.empresas.length <= 1;
+    await cargarEmpleados();
+  }
+  async function cargarEmpleados() {
+    estado.empleados = estado.empresaId ? await db.listar('empleados', { eq: { empresa_id: estado.empresaId }, order: 'nombres' }) : [];
+    const opciones = estado.empleados.filter((e) => e.activo !== false).map((e) => `<option value="${e.id}">${esc(nombreEmpleado(e))}</option>`).join('');
+    $('#man-empleado').innerHTML = opciones;
+    $('#asis-empleado').innerHTML = '<option value="">Todos</option>' + opciones;
+  }
+  $('#sel-empresa').addEventListener('change', async (ev) => {
+    estado.empresaId = ev.target.value; limpiarLiquidacion();
+    await cargarEmpleados(); refrescarVistaActual();
+  });
+
+  // ------------------------------------------------------------------
+  // Pestañas
+  // ------------------------------------------------------------------
+  let vistaActual = 'liquidacion';
+  function mostrarVista(v) {
+    vistaActual = v;
+    $$('.pestanas button').forEach((b) => b.classList.toggle('activa', b.dataset.vista === v));
+    $$('.vista').forEach((s) => { s.hidden = s.id !== 'vista-' + v; });
+    refrescarVistaActual();
+  }
+  function refrescarVistaActual() {
+    ({ empleados: pintarEmpleados, empresas: pintarEmpresas, novedades: pintarNovedades, parametros: pintarParametros, asistencia: verAsistencia }[vistaActual] || (() => {}))();
+  }
+  $$('.pestanas button').forEach((b) => b.addEventListener('click', () => mostrarVista(b.dataset.vista)));
+
+  // ------------------------------------------------------------------
+  // Periodo de liquidación
+  // ------------------------------------------------------------------
+  function prepararPeriodo() {
+    // por defecto: la última quincena cerrada
+    const hoy = new Date(); const d = hoy.getDate();
+    let anio = hoy.getFullYear(), mes = hoy.getMonth() + 1, tramo = 'q1';
+    if (d <= 15) { mes -= 1; tramo = 'q2'; if (mes === 0) { mes = 12; anio -= 1; } }
+    $('#liq-mes').value = `${anio}-${String(mes).padStart(2, '0')}`;
+    $('#liq-tramo').value = tramo;
+    if (db.demo) { $('#liq-mes').value = '2026-09'; $('#liq-tramo').value = 'q2'; }
+    actualizarRango();
+  }
+  function rangoPeriodo() {
+    const [a, m] = $('#liq-mes').value.split('-').map(Number);
+    if (!a) return null;
+    const ultimo = new Date(Date.UTC(a, m, 0)).getUTCDate();
+    const mm = String(m).padStart(2, '0');
+    const t = $('#liq-tramo').value;
+    if (t === 'q1') return { inicio: `${a}-${mm}-01`, fin: `${a}-${mm}-15` };
+    if (t === 'q2') return { inicio: `${a}-${mm}-16`, fin: `${a}-${mm}-${ultimo}` };
+    return { inicio: `${a}-${mm}-01`, fin: `${a}-${mm}-${ultimo}` };
+  }
+  function actualizarRango() {
+    const r = rangoPeriodo();
+    $('#liq-rango').textContent = r ? `${fechaLarga(r.inicio)} → ${fechaLarga(r.fin)} · ${C.dias360(r.inicio, r.fin)} días` : '—';
+    limpiarLiquidacion();
+  }
+  $('#liq-mes').addEventListener('change', actualizarRango);
+  $('#liq-tramo').addEventListener('change', actualizarRango);
+
+  function limpiarLiquidacion() {
+    estado.liquidacion = null; estado.periodo = null; estado.seleccionado = null;
+    $('#tabla-liq').hidden = true; $('#detalle').hidden = true; $('#liq-resumen').innerHTML = '';
+    $('#liq-vacio').hidden = false; $('#liq-estado').hidden = true;
+    $('#btn-excel').disabled = true; $('#btn-cerrar').disabled = true;
+  }
+
+  // ------------------------------------------------------------------
+  // Calcular
+  // ------------------------------------------------------------------
+  async function calcular() {
+    const r = rangoPeriodo(); const empresa = empresaActual();
+    if (!r || !empresa) { aviso('Elige una empresa y un periodo.'); return; }
+    await intentar(async () => {
+      // ¿ya está cerrado este periodo? entonces mostrar la foto guardada
+      const periodos = await db.listar('periodos', { eq: { empresa_id: empresa.id, fecha_inicio: r.inicio, fecha_fin: r.fin } });
+      estado.periodo = periodos[0] || null;
+      if (estado.periodo && estado.periodo.estado === 'cerrado' && estado.periodo.resultado) {
+        estado.liquidacion = estado.periodo.resultado;
+      } else {
+        const margenIni = C.isoDia(C.sumarDias(C.aFecha(r.inicio), -1));
+        const margenFin = C.isoDia(C.sumarDias(C.aFecha(r.fin), 2));
+        const [marcaciones, novedades] = await Promise.all([
+          db.listar('marcaciones', { eq: { empresa_id: empresa.id, anulada: false }, gte: { fecha_hora: margenIni }, lte: { fecha_hora: margenFin } }),
+          db.listar('novedades', { eq: { empresa_id: empresa.id }, gte: { fecha: r.inicio }, lte: { fecha: r.fin } }),
+        ]);
+        const empleados = estado.empleados.filter((e) => e.activo !== false || (e.fecha_retiro && e.fecha_retiro >= r.inicio));
+        estado.liquidacion = C.liquidarPeriodo({ empresa, empleados, marcaciones, novedades, parametros: estado.parametros, inicio: r.inicio, fin: r.fin });
+      }
+      pintarLiquidacion();
+    });
+  }
+  $('#btn-calcular').addEventListener('click', calcular);
+
+  function pintarLiquidacion() {
+    const L = estado.liquidacion; if (!L) return;
+    const cerrado = estado.periodo && estado.periodo.estado === 'cerrado';
+    $('#liq-vacio').hidden = true;
+    $('#btn-excel').disabled = false;
+    $('#btn-cerrar').disabled = cerrado || !L.empleados.length;
+    const est = $('#liq-estado'); est.hidden = false;
+    est.innerHTML = cerrado
+      ? `<span class="chip chip-ok">Periodo cerrado</span> <span class="nota">Se muestra la liquidación guardada al cerrar. Los cambios posteriores en marcaciones no la alteran.</span>`
+      : `<span class="chip">Borrador</span> <span class="nota">Calculado con las marcaciones y novedades actuales. Ciérralo cuando esté revisado y pagado.</span>`;
+
+    const extras = L.empleados.reduce((s, e) => s + e.horas.HED + e.horas.HEN + e.horas.HEDDF + e.horas.HENDF, 0);
+    const inconsist = L.empleados.reduce((s, e) => s + e.inconsistencias.length, 0);
+    $('#liq-resumen').innerHTML = [
+      ['Neto a pagar', $f(L.totales.neto), `${L.empleados.length} empleados`, 'destacada'],
+      ['Total devengado', $f(L.totales.devengado), `deducciones ${$f(L.totales.deducciones)}`],
+      ['Aportes empresa', $f(L.totales.aportes), 'seguridad social y parafiscales'],
+      ['Provisiones', $f(L.totales.provisiones), 'cesantías, prima, vacaciones'],
+      ['Costo total empresa', $f(L.totales.costo), 'devengado + aportes + provisiones'],
+      ['Horas extra', h2(extras) + ' h', inconsist ? `${inconsist} marcaciones por revisar` : 'sin marcaciones pendientes'],
+    ].map(([t, v, s, c]) => `<div class="cifra ${c || ''}"><span class="eyebrow">${t}</span><b>${v}</b><small>${s}</small></div>`).join('');
+
+    const filas = L.empleados.map((e, i) => {
+      const extra = e.horas.HED + e.horas.HEN + e.horas.HEDDF + e.horas.HENDF;
+      const recargo = e.horas.RN + e.horas.RDF + e.horas.RNDF;
+      const vRec = e.valores.RN + e.valores.RDF + e.valores.RNDF;
+      const vExt = e.valores.HED + e.valores.HEN + e.valores.HEDDF + e.valores.HENDF;
+      return `<tr class="clic ${estado.seleccionado === i ? 'sel' : ''}" data-i="${i}">
+        <td>${esc(e.nombre)}<span class="sub">${esc(e.cargo)}</span></td>
+        <td class="num">${e.dias}</td>
+        <td class="num">${h2(e.horas.ORD + recargo + extra)}</td>
+        <td class="num">${h2(recargo)}<span class="sub">${$f(vRec)}</span></td>
+        <td class="num">${h2(extra)}<span class="sub">${$f(vExt)}</span></td>
+        <td class="num">${$f(e.totalDevengado)}</td>
+        <td class="num">${$f(e.totalDeducciones)}</td>
+        <td class="num"><strong>${$f(e.neto)}</strong></td>
+        <td>${e.inconsistencias.length ? `<span class="chip chip-aviso">${e.inconsistencias.length} por revisar</span>` : '<span class="chip chip-ok">OK</span>'}</td>
+      </tr>`;
+    }).join('');
+    const t = $('#tabla-liq'); t.hidden = false;
+    t.innerHTML = `<thead><tr><th>Empleado</th><th class="num">Días</th><th class="num">Horas</th><th class="num">Recargos</th><th class="num">Extras</th><th class="num">Devengado</th><th class="num">Deducciones</th><th class="num">Neto</th><th>Asistencia</th></tr></thead>
+      <tbody>${filas || '<tr><td colspan="9" class="tenue">No hay empleados activos en este periodo.</td></tr>'}</tbody>
+      <tfoot><tr><td>Total</td><td></td><td></td><td></td><td></td><td class="num">${$f(L.totales.devengado)}</td><td class="num">${$f(L.totales.deducciones)}</td><td class="num">${$f(L.totales.neto)}</td><td></td></tr></tfoot>`;
+    t.querySelectorAll('tbody tr.clic').forEach((tr) => tr.addEventListener('click', () => { estado.seleccionado = +tr.dataset.i; pintarLiquidacion(); pintarDetalle(); }));
+    if (estado.seleccionado == null) $('#detalle').hidden = true;
+  }
+
+  function pintarDetalle() {
+    const e = estado.liquidacion.empleados[estado.seleccionado]; if (!e) return;
+    const L = estado.liquidacion;
+    const lineas = (arr, total, etiqueta) => `<div class="lineas">${arr.map((x) => `<div><span>${esc(x.concepto)}</span><span>${$f(x.valor)}</span></div>`).join('')}<div class="total"><span>${etiqueta}</span><span>${$f(total)}</span></div></div>`;
+    const dias = e.detalleDias.map((d) => {
+      const marca = d.festivo ? `<span class="chip chip-aviso">${esc(d.festivo)}</span>` : d.dominical ? '<span class="chip chip-aviso">Domingo</span>' : '';
+      const conceptos = Object.entries(d.horas).map(([c, v]) => `${C.CONCEPTOS[c].corto} ${h2(v)}`).join(' · ');
+      return `<tr class="${d.festivo || d.dominical ? 'domfest' : ''}"><td class="mono">${fechaLarga(d.fecha)} ${marca}</td><td class="mono">${d.turnos.join(', ')}</td><td>${conceptos}</td><td class="num">${$f(d.valor)}</td></tr>`;
+    }).join('');
+    const avisosReloj = e.detalleDias.flatMap((d) => (d.avisos || []).map((a) => `<div class="alerta">${esc(fechaLarga(d.fecha))} · ${esc(a)}. Se tomó como salida; revísalo si no es así.</div>`)).join('');
+    const ficha = String(e.documento).startsWith('ZK-') ? '<div class="alerta">La ficha de este empleado está incompleta (cédula, salario y fecha de ingreso provisionales). Complétala en Empleados antes de pagar.</div>' : '';
+    const alertas = ficha + avisosReloj + e.inconsistencias.map((x) => `<div class="alerta">${esc(fechaLarga(x.fecha))} · ${esc(x.hora.slice(11, 16))} — ${esc(x.motivo)}. Corrígela en Asistencia con una marcación manual.</div>`).join('');
+    const det = $('#detalle'); det.hidden = false;
+    det.innerHTML = `
+      <div class="detalle-cabecera">
+        <div><span class="eyebrow">Desprendible de pago · ${fechaLarga(L.inicio)} a ${fechaLarga(L.fin)}</span><h2>${esc(e.nombre)}</h2>
+          <p>C.C. ${esc(e.documento)} · ${esc(e.cargo)} · Salario ${$f(e.salario)} · IBC ${$f(e.ibc)}</p></div>
+        <button class="btn btn-fantasma" type="button" id="btn-cerrar-detalle">Cerrar detalle</button>
+      </div>
+      ${alertas ? `<div class="alertas">${alertas}</div>` : ''}
+      <div class="desprendible">
+        <div class="bloque"><h3>Devengos</h3>${lineas(e.devengos, e.totalDevengado, 'Total devengado')}</div>
+        <div class="bloque"><h3>Deducciones</h3>${lineas(e.deducciones, e.totalDeducciones, 'Total deducciones')}
+          <div class="neto" style="margin-top:14px"><span class="eyebrow">Neto a pagar</span><b>${$f(e.neto)}</b></div></div>
+        <div class="bloque"><h3>Aportes del empleador</h3>${lineas(e.aportes, e.totalAportes, 'Total aportes')}</div>
+        <div class="bloque"><h3>Provisiones</h3>${lineas(e.provisiones, e.totalProvisiones, 'Total provisiones')}
+          <div class="lineas" style="margin-top:8px"><div class="total"><span>Costo total para la empresa</span><span>${$f(e.costoTotal)}</span></div></div></div>
+      </div>
+      <div><h3 style="margin:0 0 8px">Día a día</h3>
+        <div class="tabla-envoltura"><table class="tabla"><thead><tr><th>Día</th><th>Turnos</th><th>Horas por concepto</th><th class="num">Valor adicional</th></tr></thead>
+        <tbody>${dias || '<tr><td colspan="4" class="tenue">Sin marcaciones en el periodo.</td></tr>'}</tbody></table></div>
+        <p class="nota">Ord. ordinaria diurna · RN recargo nocturno · RDF dominical/festivo · RNDF nocturno dominical/festivo · HED/HEN extra diurna/nocturna · HEDDF/HENDF extras en dominical/festivo.</p>
+      </div>`;
+    $('#btn-cerrar-detalle').addEventListener('click', () => { estado.seleccionado = null; det.hidden = true; pintarLiquidacion(); });
+    det.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // Cerrar periodo (guarda la foto del cálculo)
+  $('#btn-cerrar').addEventListener('click', () => {
+    const L = estado.liquidacion; if (!L) return;
+    abrirDialogo({
+      titulo: 'Cerrar periodo',
+      campos: [{ tipo: 'texto', html: `<p class="ancho">Se guardará la liquidación de <strong>${esc(empresaActual().nombre)}</strong> del ${fechaLarga(L.inicio)} al ${fechaLarga(L.fin)}: ${L.empleados.length} empleados, neto ${$f(L.totales.neto)}. Después solo un administrador podrá reabrirlo.</p>` }],
+      textoGuardar: 'Cerrar periodo',
+      alGuardar: async () => {
+        const datos = { estado: 'cerrado', resultado: L, cerrado_en: new Date().toISOString() };
+        if (estado.periodo) await db.actualizar('periodos', estado.periodo.id, datos);
+        else await db.insertar('periodos', [{ empresa_id: estado.empresaId, fecha_inicio: L.inicio, fecha_fin: L.fin, ...datos }]);
+        aviso('Periodo cerrado'); await calcular();
+      },
+    });
+  });
+
+  // Exportar a Excel
+  $('#btn-excel').addEventListener('click', () => {
+    const L = estado.liquidacion; if (!L || !window.XLSX) return;
+    const resumen = L.empleados.map((e) => ({
+      Documento: e.documento, Empleado: e.nombre, Cargo: e.cargo, Salario: e.salario, Días: e.dias,
+      'H. ordinarias': e.horas.ORD, 'H. recargo nocturno': e.horas.RN, 'H. dominical/festivo': e.horas.RDF, 'H. nocturna dom/fest': e.horas.RNDF,
+      'H. extra diurna': e.horas.HED, 'H. extra nocturna': e.horas.HEN, 'H. extra diurna dom/fest': e.horas.HEDDF, 'H. extra nocturna dom/fest': e.horas.HENDF,
+      'Valor recargos y extras': Object.values(e.valores).reduce((s, v) => s + v, 0),
+      Devengado: e.totalDevengado, Deducciones: e.totalDeducciones, Neto: e.neto, IBC: e.ibc,
+      'Aportes empresa': e.totalAportes, Provisiones: e.totalProvisiones, 'Costo total': e.costoTotal,
+    }));
+    const conceptos = L.empleados.flatMap((e) => [
+      ...e.devengos.map((x) => ({ Empleado: e.nombre, Tipo: 'Devengo', Concepto: x.concepto, Valor: x.valor })),
+      ...e.deducciones.map((x) => ({ Empleado: e.nombre, Tipo: 'Deducción', Concepto: x.concepto, Valor: x.valor })),
+      ...e.aportes.map((x) => ({ Empleado: e.nombre, Tipo: 'Aporte empleador', Concepto: x.concepto, Valor: x.valor })),
+      ...e.provisiones.map((x) => ({ Empleado: e.nombre, Tipo: 'Provisión', Concepto: x.concepto, Valor: x.valor })),
+    ]);
+    const diario = L.empleados.flatMap((e) => e.detalleDias.map((d) => ({
+      Empleado: e.nombre, Fecha: d.fecha, Festivo: d.festivo || (d.dominical ? 'Domingo' : ''), Turnos: d.turnos.join(', '),
+      ...Object.fromEntries(Object.keys(C.CONCEPTOS).map((c) => [c, d.horas[c] || 0])), 'Valor adicional': d.valor,
+    })));
+    const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, XLSX.utils.json_to_sheet(resumen), 'Resumen');
+    XLSX.utils.book_append_sheet(libro, XLSX.utils.json_to_sheet(conceptos), 'Conceptos');
+    XLSX.utils.book_append_sheet(libro, XLSX.utils.json_to_sheet(diario), 'Día a día');
+    const nombre = `Nomina_${(empresaActual()?.nombre || 'empresa').replace(/[^\w]+/g, '_')}_${L.inicio}_${L.fin}.xlsx`;
+    try { XLSX.writeFile(libro, nombre); aviso('Archivo generado: ' + nombre); }
+    catch (e) { aviso('Este navegador bloqueó la descarga.'); }
+  });
+
+  // ------------------------------------------------------------------
+  // Asistencia: importación del biométrico
+  // ------------------------------------------------------------------
+  // Nombres del reloj: "JHON JAIRO CARDONA PATIÑO" → nombres "Jhon Jairo", apellidos "Cardona Patiño"
+  function separarNombre(completo) {
+    const tit = (w) => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+    const p = String(completo || '').trim().split(/\s+/).filter(Boolean).map(tit);
+    if (p.length <= 1) return { nombres: p[0] || 'Sin nombre', apellidos: '' };
+    if (p.length === 2) return { nombres: p[0], apellidos: p[1] };
+    if (p.length === 3) return { nombres: p[0], apellidos: p.slice(1).join(' ') };
+    return { nombres: p.slice(0, p.length - 2).join(' '), apellidos: p.slice(-2).join(' ') };
+  }
+  const leerBuffer = (archivo) => (archivo.arrayBuffer ? archivo.arrayBuffer() : new Promise((ok, mal) => {
+    const r = new FileReader(); r.onload = () => ok(r.result); r.onerror = () => mal(r.error); r.readAsArrayBuffer(archivo);
+  }));
+  async function leerArchivo(archivo) {
+    const nombre = archivo.name.toLowerCase();
+    if (/\.(xls|xlsx|xlsm|ods)$/.test(nombre)) {
+      if (!window.XLSX) throw new Error('No se pudo cargar el lector de Excel. Revisa la conexión a internet.');
+      const libro = XLSX.read(new Uint8Array(await leerBuffer(archivo)), { type: 'array' });
+      const filas = XLSX.utils.sheet_to_json(libro.Sheets[libro.SheetNames[0]], { header: 1, raw: false, defval: '' });
+      return C.leerFilasBiometrico(filas);
+    }
+    const texto = await archivo.text();
+    // CSV/TXT con encabezados (ID, Nombre, Fecha/Hora, Estado…) o formato crudo attlog.dat
+    const filas = texto.replace(/^﻿/, '').split(/\r?\n/).map((l) => l.split(/\t|;|,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map((c) => c.replace(/^"|"$/g, '').trim()));
+    const tabla = C.leerFilasBiometrico(filas);
+    return tabla.columnas ? tabla : C.leerArchivoBiometrico(texto);
+  }
+
+  let pendientes = [], nuevosEmpleados = [];
+  $('#archivo-bio').addEventListener('change', async (ev) => {
+    const archivo = ev.target.files[0]; if (!archivo) return;
+    const previa = $('#import-previa'); previa.hidden = false; previa.textContent = 'Leyendo archivo…';
+    let lectura;
+    try { lectura = await leerArchivo(archivo); }
+    catch (e) { previa.innerHTML = `<div class="alerta">${esc(e.message)}</div>`; return; }
+    const { registros, errores } = lectura;
+    const porCodigo = new Map(estado.empleados.map((e) => [String(e.codigo_biometrico), e]));
+    const sinFicha = new Map();
+    registros.forEach((r) => { if (!porCodigo.has(r.codigo) && !sinFicha.has(r.codigo)) sinFicha.set(r.codigo, r.nombre || ''); });
+    nuevosEmpleados = [...sinFicha.entries()].map(([codigo, nombre]) => ({ codigo, nombre }));
+    pendientes = registros.map((r) => ({ codigo: r.codigo, fecha_hora: r.fecha_hora, tipo: r.tipo || null }));
+    const fechas = registros.map((r) => r.fecha_hora).sort();
+    const conTipo = registros.filter((r) => r.tipo).length;
+    previa.innerHTML = `
+      <div><strong>${registros.length.toLocaleString('es-CO')}</strong> marcaciones de <strong>${new Set(registros.map((r) => r.codigo)).size}</strong> personas${fechas.length ? `, del ${fechaLarga(fechas[0].slice(0, 10))} al ${fechaLarga(fechas[fechas.length - 1].slice(0, 10))}` : ''}.${conTipo ? ` El archivo trae Entrada/Salida en ${conTipo.toLocaleString('es-CO')} de ellas.` : ''}</div>
+      ${nuevosEmpleados.length ? `<div class="alerta"><label class="check-linea"><input type="checkbox" id="crear-empleados" checked> Crear ${nuevosEmpleados.length} empleados nuevos con el nombre y el código del reloj</label>
+        <span class="sub">Quedan con salario mínimo provisional y marcados "Completar ficha" para que pongas cédula, salario y fecha de ingreso antes de liquidar.</span>
+        <details><summary>Ver lista</summary>${nuevosEmpleados.map((n) => `<div class="mono">${esc(n.codigo)} · ${esc(n.nombre || 'sin nombre')}</div>`).join('')}</details></div>` : ''}
+      ${errores.length ? `<div class="alerta">${errores.length} filas no se pudieron leer (${esc(errores.slice(0, 3).join('; '))}${errores.length > 3 ? '…' : ''}).</div>` : ''}`;
+    $('#btn-importar').hidden = !registros.length;
+  });
+  $('#btn-importar').addEventListener('click', () => intentar(async () => {
+    if (!estado.empresaId) { aviso('Elige primero la empresa.'); return; }
+    if (!pendientes.length) { aviso('Primero elige el archivo del reloj.'); return; }
+    const btn = $('#btn-importar'); btn.disabled = true; btn.textContent = 'Guardando…';
+    try {
+      const crear = $('#crear-empleados');
+      if (nuevosEmpleados.length && crear && crear.checked) {
+        const p = C.parametroVigente(estado.parametros, C.isoDia(new Date()));
+        const inicio = pendientes.map((m) => m.fecha_hora).sort()[0].slice(0, 10);
+        await db.insertar('empleados', nuevosEmpleados.map((n) => ({
+          empresa_id: estado.empresaId, ...separarNombre(n.nombre), documento: 'ZK-' + n.codigo,
+          codigo_biometrico: n.codigo, salario: p.smmlv, fecha_ingreso: inicio,
+        })));
+        await cargarEmpleados();
+      }
+      const porCodigo = new Map(estado.empleados.map((e) => [String(e.codigo_biometrico), e.id]));
+      const filas = pendientes.map((m) => ({
+        empresa_id: estado.empresaId, empleado_id: porCodigo.get(m.codigo) || null, codigo_biometrico: m.codigo,
+        fecha_hora: m.fecha_hora, tipo: m.tipo, origen: 'archivo', anulada: false,
+      }));
+      const nuevas = await db.guardarMarcaciones(filas);
+      aviso(`${nuevas.toLocaleString('es-CO')} marcaciones nuevas guardadas (${(filas.length - nuevas).toLocaleString('es-CO')} ya existían o eran repetidas)`);
+      // dejar la asistencia mostrando el rango del archivo
+      const fs = pendientes.map((m) => m.fecha_hora).sort();
+      $('#asis-desde').value = fs[0].slice(0, 10); $('#asis-hasta').value = fs[fs.length - 1].slice(0, 10);
+      pendientes = []; nuevosEmpleados = [];
+      $('#archivo-bio').value = ''; $('#import-previa').hidden = true; btn.hidden = true;
+      limpiarLiquidacion(); verAsistencia();
+    } finally { btn.disabled = false; btn.textContent = 'Guardar marcaciones'; }
+  }));
+
+  $('#form-manual').addEventListener('submit', (ev) => {
+    ev.preventDefault();
+    intentar(async () => {
+      const e = estado.empleados.find((x) => x.id === $('#man-empleado').value);
+      if (!e) return;
+      if (!e.codigo_biometrico) { aviso('Ese empleado no tiene código de biométrico en su ficha.'); return; }
+      await db.insertar('marcaciones', [{ empresa_id: estado.empresaId, empleado_id: e.id, codigo_biometrico: String(e.codigo_biometrico), fecha_hora: $('#man-fecha').value.replace('T', ' ') + ':00', origen: 'manual', anulada: false, observacion: $('#man-obs').value || null }]);
+      aviso('Marcación agregada'); $('#man-obs').value = ''; limpiarLiquidacion(); verAsistencia();
+    });
+  });
+
+  function rangoAsistenciaPorDefecto() {
+    if ($('#asis-desde').value) return;
+    const r = rangoPeriodo(); if (!r) return;
+    $('#asis-desde').value = r.inicio; $('#asis-hasta').value = r.fin;
+  }
+  async function verAsistencia() {
+    rangoAsistenciaPorDefecto();
+    const desde = $('#asis-desde').value, hasta = $('#asis-hasta').value;
+    const t = $('#tabla-asis');
+    if (!estado.empresaId || !desde || !hasta) { t.innerHTML = ''; return; }
+    await intentar(async () => {
+      const marc = await db.listar('marcaciones', { eq: { empresa_id: estado.empresaId, anulada: false }, gte: { fecha_hora: desde }, lte: { fecha_hora: C.isoDia(C.sumarDias(C.aFecha(hasta), 1)) + ' 23:59:59' } });
+      const filtro = $('#asis-empleado').value;
+      const lista = estado.empleados.filter((e) => !filtro || e.id === filtro);
+      const filas = [];
+      for (const e of lista) {
+        const propias = marc.filter((m) => (m.empleado_id ? m.empleado_id === e.id : String(m.codigo_biometrico) === String(e.codigo_biometrico)));
+        const { turnos, inconsistencias } = C.emparejarMarcaciones(propias);
+        turnos.filter((x) => x.fecha >= desde && x.fecha <= hasta).forEach((x) => filas.push({ e, fecha: x.fecha, texto: `${x.entrada.slice(11, 16)} → ${x.salida.slice(11, 16)}${x.salida.slice(0, 10) !== x.fecha ? ' (+1)' : ''}`, horas: x.minutos / 60, alerta: false }));
+        inconsistencias.filter((x) => x.fecha >= desde && x.fecha <= hasta).forEach((x) => filas.push({ e, fecha: x.fecha, texto: `${x.hora.slice(11, 16)} sin pareja`, horas: 0, alerta: true }));
+      }
+      const sinAsignar = marc.filter((m) => !m.empleado_id && !estado.empleados.some((e) => String(e.codigo_biometrico) === String(m.codigo_biometrico))).length;
+      filas.sort((a, b) => a.fecha.localeCompare(b.fecha) || nombreEmpleado(a.e).localeCompare(nombreEmpleado(b.e)));
+      t.innerHTML = `<thead><tr><th>Día</th><th>Empleado</th><th>Turno</th><th class="num">Horas</th><th></th></tr></thead><tbody>${
+        filas.map((f) => `<tr class="${C.esDominicalOFestivo(f.fecha) ? 'domfest' : ''}"><td class="mono">${fechaLarga(f.fecha)}${C.nombreFestivo(f.fecha) ? ` <span class="chip chip-aviso">${esc(C.nombreFestivo(f.fecha))}</span>` : ''}</td><td>${esc(nombreEmpleado(f.e))}</td><td class="mono">${f.texto}</td><td class="num">${f.horas ? h2(f.horas) : ''}</td><td>${f.alerta ? '<span class="chip chip-aviso">Revisar</span>' : ''}</td></tr>`).join('')
+        || '<tr><td colspan="5" class="tenue">No hay marcaciones en estas fechas. Importa el archivo del biométrico arriba.</td></tr>'
+      }</tbody>${sinAsignar ? `<tfoot><tr><td colspan="5">${sinAsignar} marcaciones con códigos del reloj que no corresponden a ningún empleado.</td></tr></tfoot>` : ''}`;
+    });
+  }
+  $('#btn-ver-asis').addEventListener('click', verAsistencia);
+
+  // ------------------------------------------------------------------
+  // Diálogo genérico de formularios
+  // ------------------------------------------------------------------
+  let dialogoActual = null;
+  function abrirDialogo({ titulo, campos, valores = {}, alGuardar, alEliminar, textoGuardar = 'Guardar' }) {
+    dialogoActual = { campos, alGuardar, alEliminar };
+    $('#dialogo-titulo').textContent = titulo;
+    $('#dialogo-guardar').textContent = textoGuardar;
+    $('#dialogo-error').hidden = true;
+    $('#dialogo-eliminar').hidden = !alEliminar;
+    $('#dialogo-campos').innerHTML = campos.map((c) => {
+      if (c.tipo === 'texto') return c.html;
+      const id = 'f-' + c.nombre; const v = valores[c.nombre] ?? c.defecto ?? '';
+      if (c.tipo === 'check') return `<div class="check ${c.ancho ? 'ancho' : ''}"><input id="${id}" type="checkbox" ${v ? 'checked' : ''}><label for="${id}">${c.etiqueta}</label></div>`;
+      if (c.tipo === 'select') return `<div class="${c.ancho ? 'ancho' : ''}"><label for="${id}">${c.etiqueta}</label><select id="${id}">${c.opciones.map(([val, txt]) => `<option value="${esc(val)}" ${String(val) === String(v) ? 'selected' : ''}>${esc(txt)}</option>`).join('')}</select></div>`;
+      return `<div class="${c.ancho ? 'ancho' : ''}"><label for="${id}">${c.etiqueta}</label><input id="${id}" type="${c.tipo || 'text'}" value="${esc(v)}" ${c.requerido ? 'required' : ''} ${c.paso ? `step="${c.paso}"` : ''}></div>`;
+    }).join('');
+    $('#dialogo').showModal();
+  }
+  function leerDialogo() {
+    const out = {};
+    dialogoActual.campos.forEach((c) => {
+      if (!c.nombre) return;
+      const el = $('#f-' + c.nombre);
+      if (c.tipo === 'check') out[c.nombre] = el.checked;
+      else if (c.tipo === 'number') out[c.nombre] = el.value === '' ? null : +el.value;
+      else out[c.nombre] = el.value.trim() === '' ? null : el.value.trim();
+    });
+    return out;
+  }
+  $('#dialogo-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    if (!$('#dialogo-form').reportValidity()) return;
+    try { await dialogoActual.alGuardar(leerDialogo()); $('#dialogo').close(); }
+    catch (e) { $('#dialogo-error').textContent = e.message; $('#dialogo-error').hidden = false; }
+  });
+  $('#dialogo-cancelar').addEventListener('click', () => $('#dialogo').close());
+  let confirmarEliminar = false;
+  $('#dialogo-eliminar').addEventListener('click', async () => {
+    const b = $('#dialogo-eliminar');
+    if (!confirmarEliminar) { confirmarEliminar = true; b.textContent = '¿Seguro? Toca otra vez'; setTimeout(() => { confirmarEliminar = false; b.textContent = 'Eliminar'; }, 4000); return; }
+    confirmarEliminar = false; b.textContent = 'Eliminar';
+    try { await dialogoActual.alEliminar(); $('#dialogo').close(); }
+    catch (e) { $('#dialogo-error').textContent = e.message; $('#dialogo-error').hidden = false; }
+  });
+
+  // ------------------------------------------------------------------
+  // Empleados
+  // ------------------------------------------------------------------
+  const CAMPOS_EMPLEADO = [
+    { nombre: 'nombres', etiqueta: 'Nombres', requerido: true },
+    { nombre: 'apellidos', etiqueta: 'Apellidos' },
+    { nombre: 'documento', etiqueta: 'Cédula', requerido: true },
+    { nombre: 'cargo', etiqueta: 'Cargo' },
+    { nombre: 'salario', etiqueta: 'Salario mensual', tipo: 'number', requerido: true, paso: '1' },
+    { nombre: 'tipo_salario', etiqueta: 'Tipo de salario', tipo: 'select', opciones: [['ordinario', 'Ordinario'], ['integral', 'Integral']] },
+    { nombre: 'tipo_contrato', etiqueta: 'Contrato', tipo: 'select', opciones: [['indefinido', 'Término indefinido'], ['fijo', 'Término fijo'], ['obra_labor', 'Obra o labor'], ['aprendizaje', 'Aprendizaje']] },
+    { nombre: 'fecha_ingreso', etiqueta: 'Fecha de ingreso', tipo: 'date', requerido: true },
+    { nombre: 'fecha_retiro', etiqueta: 'Fecha de retiro', tipo: 'date' },
+    { nombre: 'dias_laborales_semana', etiqueta: 'Días laborales por semana', tipo: 'number', defecto: 6 },
+    { nombre: 'codigo_biometrico', etiqueta: 'Código en el biométrico' },
+    { nombre: 'arl_riesgo', etiqueta: 'Riesgo ARL', tipo: 'select', opciones: [[1, 'I · 0,522 %'], [2, 'II · 1,044 %'], [3, 'III · 2,436 %'], [4, 'IV · 4,35 %'], [5, 'V · 6,96 %']] },
+    { nombre: 'eps', etiqueta: 'EPS' }, { nombre: 'afp', etiqueta: 'Fondo de pensiones' }, { nombre: 'ccf', etiqueta: 'Caja de compensación' },
+    { nombre: 'auxilio_transporte', etiqueta: 'Recibe auxilio de transporte (si gana hasta 2 SMMLV)', tipo: 'check', defecto: true, ancho: true },
+    { nombre: 'activo', etiqueta: 'Activo', tipo: 'check', defecto: true },
+  ];
+  function pintarEmpleados() {
+    const t = $('#tabla-empleados');
+    if (!estado.empresaId) { t.innerHTML = '<tbody><tr><td class="tenue">Agrega primero una empresa.</td></tr></tbody>'; return; }
+    t.innerHTML = `<thead><tr><th>Empleado</th><th>Cédula</th><th class="num">Salario</th><th>Ingreso</th><th>Código reloj</th><th>Estado</th></tr></thead><tbody>${
+      estado.empleados.map((e) => `<tr class="clic" data-id="${e.id}"><td>${esc(nombreEmpleado(e))}<span class="sub">${esc(e.cargo || '')}</span></td><td class="mono">${esc(e.documento)}</td><td class="num">${$f(e.salario)}${e.tipo_salario === 'integral' ? '<span class="sub">integral</span>' : ''}</td><td class="mono">${esc(e.fecha_ingreso)}</td><td class="mono">${esc(e.codigo_biometrico || '—')}</td><td>${String(e.documento).startsWith('ZK-') ? '<span class="chip chip-aviso">Completar ficha</span>' : e.activo === false ? '<span class="chip">Retirado</span>' : '<span class="chip chip-ok">Activo</span>'}</td></tr>`).join('')
+      || '<tr><td colspan="6" class="tenue">Esta empresa no tiene empleados todavía.</td></tr>'}</tbody>`;
+    t.querySelectorAll('tr.clic').forEach((tr) => tr.addEventListener('click', () => editarEmpleado(estado.empleados.find((e) => e.id === tr.dataset.id))));
+  }
+  function editarEmpleado(emp) {
+    abrirDialogo({
+      titulo: emp ? 'Editar empleado' : 'Nuevo empleado', campos: CAMPOS_EMPLEADO, valores: emp || {},
+      alGuardar: async (d) => {
+        if (d.codigo_biometrico) d.codigo_biometrico = String(d.codigo_biometrico).replace(/^0+(?=\d)/, '');
+        d.arl_riesgo = +d.arl_riesgo;
+        if (emp) await db.actualizar('empleados', emp.id, d);
+        else await db.insertar('empleados', [{ ...d, empresa_id: estado.empresaId }]);
+        aviso('Empleado guardado'); await cargarEmpleados(); pintarEmpleados(); limpiarLiquidacion();
+      },
+      alEliminar: emp ? async () => { await db.eliminar('empleados', emp.id); aviso('Empleado eliminado'); await cargarEmpleados(); pintarEmpleados(); } : null,
+    });
+  }
+  $('#btn-nuevo-empleado').addEventListener('click', () => { if (!estado.empresaId) { aviso('Agrega primero una empresa.'); return; } editarEmpleado(null); });
+
+  // ------------------------------------------------------------------
+  // Empresas
+  // ------------------------------------------------------------------
+  const CAMPOS_EMPRESA = [
+    { nombre: 'nombre', etiqueta: 'Razón social', requerido: true, ancho: true },
+    { nombre: 'slug', etiqueta: 'Nombre del enlace (ej. la-rufina)', ancho: true },
+    { nombre: 'nit', etiqueta: 'NIT' }, { nombre: 'ciudad', etiqueta: 'Ciudad' },
+    { nombre: 'periodicidad', etiqueta: 'Periodicidad de pago', tipo: 'select', opciones: [['quincenal', 'Quincenal'], ['mensual', 'Mensual']] },
+    { nombre: 'exonerada_aportes', etiqueta: 'Exonerada de salud empleador, SENA e ICBF (art. 114-1 E.T.)', tipo: 'check', defecto: true, ancho: true },
+  ];
+  function pintarEmpresas() {
+    const t = $('#tabla-empresas');
+    t.innerHTML = `<thead><tr><th>Empresa</th><th>Enlace para la empresa</th><th>Pago</th><th>Aportes</th><th></th></tr></thead><tbody>${
+      estado.empresas.map((e) => `<tr data-id="${e.id}"><td>${esc(e.nombre)}<span class="sub">${esc([e.nit, e.ciudad].filter(Boolean).join(' · '))}</span></td>
+        <td>${e.slug ? `<span class="mono enlace">${esc(enlaceEmpresa(e))}</span> <button class="btn btn-fantasma btn-mini" data-copiar="${esc(enlaceEmpresa(e))}" type="button">Copiar</button>` : '<span class="tenue">Sin enlace: edita la empresa y ponle un nombre de enlace</span>'}</td>
+        <td>${esc(e.periodicidad)}</td><td>${e.exonerada_aportes ? 'Exonerada 114-1' : 'Paga todos'}</td>
+        <td class="acciones-fila"><button class="btn btn-mini" data-accesos="${e.id}" type="button">Accesos</button><button class="btn btn-mini" data-editar="${e.id}" type="button">Editar</button></td></tr>`).join('')
+      || '<tr><td colspan="5" class="tenue">Agrega tu primera empresa cliente.</td></tr>'}</tbody>`;
+    t.querySelectorAll('[data-editar]').forEach((b) => b.addEventListener('click', () => editarEmpresa(estado.empresas.find((e) => e.id === b.dataset.editar))));
+    t.querySelectorAll('[data-accesos]').forEach((b) => b.addEventListener('click', () => verAccesos(estado.empresas.find((e) => e.id === b.dataset.accesos))));
+    t.querySelectorAll('[data-copiar]').forEach((b) => b.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(b.dataset.copiar); aviso('Enlace copiado'); }
+      catch (e) { const r = document.createRange(); r.selectNodeContents(b.previousElementSibling); getSelection().removeAllRanges(); getSelection().addRange(r); aviso('Selecciona y copia el enlace'); }
+    }));
+  }
+  function editarEmpresa(emp) {
+    abrirDialogo({
+      titulo: emp ? 'Editar empresa' : 'Nueva empresa', campos: CAMPOS_EMPRESA, valores: emp || {},
+      alGuardar: async (d) => {
+        d.slug = hacerSlug(d.slug || d.nombre) || null;
+        if (emp) await db.actualizar('empresas', emp.id, d);
+        else { const [n] = await db.insertar('empresas', [d]); estado.empresaId = n.id; }
+        aviso('Empresa guardada'); await cargarEmpresas(); pintarEmpresas();
+      },
+      alEliminar: emp && esAdmin() ? async () => { await db.eliminar('empresas', emp.id); aviso('Empresa eliminada'); await cargarEmpresas(); pintarEmpresas(); } : null,
+    });
+  }
+  // Usuarios de la empresa cliente que pueden entrar por su enlace
+  async function verAccesos(emp) {
+    const usuarios = (await intentar(() => db.rpc('usuarios_de_empresa', { p_empresa: emp.id }))) || [];
+    abrirDialogo({
+      titulo: `Accesos · ${emp.nombre}`,
+      campos: [
+        { tipo: 'texto', html: `<div class="ancho lista-accesos">${usuarios.length
+          ? usuarios.map((u) => `<div><span>${esc(u.email)}</span>${esAdmin() ? `<button class="btn btn-fantasma btn-mini" type="button" data-quitar="${u.usuario_id}">Quitar</button>` : ''}</div>`).join('')
+          : '<p class="nota">Nadie de esta empresa tiene acceso todavía.</p>'}</div>` },
+        ...(esAdmin() ? [
+          { tipo: 'texto', html: '<p class="ancho nota">Para dar acceso: crea el usuario en Supabase → Authentication → Users (correo y contraseña), escribe aquí su correo y guarda. Luego envíale el enlace de la empresa.</p>' },
+          { nombre: 'email', etiqueta: 'Correo del usuario de la empresa', tipo: 'email', ancho: true },
+        ] : []),
+      ],
+      textoGuardar: esAdmin() ? 'Dar acceso' : 'Cerrar',
+      alGuardar: async (d) => {
+        if (!esAdmin() || !d.email) return;
+        await db.rpc('asignar_usuario_empresa', { p_email: d.email, p_empresa: emp.id });
+        aviso('Acceso agregado');
+      },
+    });
+    $$('#dialogo [data-quitar]').forEach((b) => b.addEventListener('click', async () => {
+      await intentar(() => db.rpc('quitar_usuario_empresa', { p_usuario: b.dataset.quitar, p_empresa: emp.id }));
+      $('#dialogo').close(); aviso('Acceso retirado'); verAccesos(emp);
+    }));
+  }
+  $('#btn-nueva-empresa').addEventListener('click', () => editarEmpresa(null));
+
+  // ------------------------------------------------------------------
+  // Novedades
+  // ------------------------------------------------------------------
+  const TIPOS_NOVEDAD = [['bonificacion_salarial', 'Bonificación salarial'], ['bonificacion_no_salarial', 'Bonificación no salarial'], ['descuento', 'Descuento'], ['prestamo', 'Cuota de préstamo'], ['incapacidad', 'Incapacidad (días)'], ['licencia_no_remunerada', 'Licencia no remunerada (días)'], ['vacaciones', 'Vacaciones (días)']];
+  const nombreTipo = (t) => (TIPOS_NOVEDAD.find((x) => x[0] === t) || [, t])[1];
+  async function pintarNovedades() {
+    const t = $('#tabla-novedades');
+    if (!estado.empresaId) { t.innerHTML = ''; return; }
+    await intentar(async () => {
+      const lista = await db.listar('novedades', { eq: { empresa_id: estado.empresaId }, order: 'fecha', asc: false });
+      t.innerHTML = `<thead><tr><th>Fecha</th><th>Empleado</th><th>Tipo</th><th class="num">Valor</th><th class="num">Días</th><th>Detalle</th></tr></thead><tbody>${
+        lista.map((n) => `<tr class="clic" data-id="${n.id}"><td class="mono">${esc(n.fecha)}</td><td>${esc(nombreEmpleado(estado.empleados.find((e) => e.id === n.empleado_id)))}</td><td>${esc(nombreTipo(n.tipo))}</td><td class="num">${+n.valor ? $f(n.valor) : ''}</td><td class="num">${+n.dias || ''}</td><td>${esc(n.descripcion || '')}</td></tr>`).join('')
+        || '<tr><td colspan="6" class="tenue">Sin novedades registradas.</td></tr>'}</tbody>`;
+      t.querySelectorAll('tr.clic').forEach((tr) => tr.addEventListener('click', () => editarNovedad(lista.find((n) => n.id == tr.dataset.id))));
+    });
+  }
+  function editarNovedad(nov) {
+    abrirDialogo({
+      titulo: nov ? 'Editar novedad' : 'Nueva novedad',
+      campos: [
+        { nombre: 'empleado_id', etiqueta: 'Empleado', tipo: 'select', opciones: estado.empleados.map((e) => [e.id, nombreEmpleado(e)]), ancho: true },
+        { nombre: 'tipo', etiqueta: 'Tipo', tipo: 'select', opciones: TIPOS_NOVEDAD },
+        { nombre: 'fecha', etiqueta: 'Fecha', tipo: 'date', requerido: true },
+        { nombre: 'valor', etiqueta: 'Valor (pesos)', tipo: 'number', defecto: 0, paso: '1' },
+        { nombre: 'dias', etiqueta: 'Días', tipo: 'number', defecto: 0, paso: '0.5' },
+        { nombre: 'descripcion', etiqueta: 'Descripción', ancho: true },
+      ],
+      valores: nov || {},
+      alGuardar: async (d) => {
+        d.valor = d.valor || 0; d.dias = d.dias || 0;
+        if (nov) await db.actualizar('novedades', nov.id, d); else await db.insertar('novedades', [{ ...d, empresa_id: estado.empresaId }]);
+        aviso('Novedad guardada'); limpiarLiquidacion(); pintarNovedades();
+      },
+      alEliminar: nov ? async () => { await db.eliminar('novedades', nov.id); aviso('Novedad eliminada'); limpiarLiquidacion(); pintarNovedades(); } : null,
+    });
+  }
+  $('#btn-nueva-novedad').addEventListener('click', () => { if (!estado.empleados.length) { aviso('Agrega primero empleados.'); return; } editarNovedad(null); });
+
+  // ------------------------------------------------------------------
+  // Parámetros legales y festivos
+  // ------------------------------------------------------------------
+  const pct = (v) => `${Math.round(+v * 1000) / 10} %`;
+  function pintarParametros() {
+    const t = $('#tabla-parametros');
+    const hoy = C.isoDia(new Date(Date.UTC(new Date().getFullYear(), new Date().getMonth(), new Date().getDate())));
+    let vigente = null; try { vigente = C.parametroVigente(estado.parametros, hoy).vigente_desde; } catch (e) { /* sin parámetros */ }
+    t.innerHTML = `<thead><tr><th>Rige desde</th><th class="num">SMMLV</th><th class="num">Aux. transporte</th><th class="num">Jornada</th><th>Nocturno</th><th class="num">Rec. nocturno</th><th class="num">Dominical</th><th class="num">Extra diurna</th><th class="num">Extra nocturna</th><th>Norma</th></tr></thead><tbody>${
+      estado.parametros.map((p) => `<tr class="${estado.perfil.rol === 'admin' ? 'clic' : ''}" data-id="${p.id}"><td class="mono">${p.vigente_desde} ${p.vigente_desde === vigente ? '<span class="chip chip-ok">Vigente</span>' : ''}</td><td class="num">${$f(p.smmlv)}</td><td class="num">${$f(p.auxilio_transporte)}</td><td class="num">${+p.jornada_semanal} h</td><td class="mono">${String(p.inicio_nocturno || '19:00').slice(0, 5)}–${String(p.fin_nocturno || '06:00').slice(0, 5)}</td><td class="num">${pct(p.recargo_nocturno)}</td><td class="num">${pct(p.recargo_dominical)}</td><td class="num">${pct(p.extra_diurna)}</td><td class="num">${pct(p.extra_nocturna)}</td><td class="tenue">${esc(p.norma || '')}</td></tr>`).join('')
+    }</tbody>`;
+    if (estado.perfil.rol === 'admin') t.querySelectorAll('tr.clic').forEach((tr) => tr.addEventListener('click', () => editarParametro(estado.parametros.find((p) => String(p.id) === tr.dataset.id))));
+    const anio = new Date().getFullYear();
+    const fest = C.festivosColombia(anio);
+    $('#lista-festivos').innerHTML = Object.entries(fest).sort().map(([f, n]) => `<div><span class="mono">${fechaLarga(f)}</span><span>${esc(n)}</span></div>`).join('');
+    document.querySelector('#vista-parametros h3').textContent = `Festivos ${anio}`;
+  }
+  function editarParametro(p) {
+    if (estado.perfil.rol !== 'admin') { aviso('Solo un administrador puede cambiar parámetros legales.'); return; }
+    const base = p || estado.parametros[estado.parametros.length - 1] || {};
+    abrirDialogo({
+      titulo: p ? 'Editar vigencia' : 'Nueva vigencia',
+      campos: [
+        ...(p ? [] : [{ tipo: 'texto', html: '<p class="ancho nota">Se copian los valores de la última vigencia. Cambia solo lo que cambió.</p>' }]),
+        { nombre: 'vigente_desde', etiqueta: 'Rige desde', tipo: 'date', requerido: true },
+        { nombre: 'smmlv', etiqueta: 'Salario mínimo', tipo: 'number', requerido: true, paso: '1' },
+        { nombre: 'auxilio_transporte', etiqueta: 'Auxilio de transporte', tipo: 'number', requerido: true, paso: '1' },
+        { nombre: 'jornada_semanal', etiqueta: 'Jornada semanal (horas)', tipo: 'number', requerido: true, paso: '0.5' },
+        { nombre: 'inicio_nocturno', etiqueta: 'Inicio jornada nocturna', tipo: 'time', defecto: '19:00' },
+        { nombre: 'fin_nocturno', etiqueta: 'Fin jornada nocturna', tipo: 'time', defecto: '06:00' },
+        { nombre: 'recargo_nocturno', etiqueta: 'Recargo nocturno (0,35 = 35 %)', tipo: 'number', paso: '0.01' },
+        { nombre: 'recargo_dominical', etiqueta: 'Recargo dominical/festivo', tipo: 'number', paso: '0.01' },
+        { nombre: 'extra_diurna', etiqueta: 'Recargo extra diurna', tipo: 'number', paso: '0.01' },
+        { nombre: 'extra_nocturna', etiqueta: 'Recargo extra nocturna', tipo: 'number', paso: '0.01' },
+        { nombre: 'norma', etiqueta: 'Norma que lo fija', ancho: true },
+      ],
+      valores: p ? { ...p, inicio_nocturno: String(p.inicio_nocturno || '').slice(0, 5), fin_nocturno: String(p.fin_nocturno || '').slice(0, 5) }
+                 : { ...base, vigente_desde: '', norma: '', inicio_nocturno: String(base.inicio_nocturno || '19:00').slice(0, 5), fin_nocturno: String(base.fin_nocturno || '06:00').slice(0, 5) },
+      alGuardar: async (d) => {
+        if (p) await db.actualizar('parametros_legales', p.id, d); else await db.insertar('parametros_legales', [d]);
+        estado.parametros = await db.listar('parametros_legales', { order: 'vigente_desde' });
+        aviso('Parámetros guardados'); limpiarLiquidacion(); pintarParametros();
+      },
+      alEliminar: p ? async () => { await db.eliminar('parametros_legales', p.id); estado.parametros = await db.listar('parametros_legales', { order: 'vigente_desde' }); pintarParametros(); } : null,
+    });
+  }
+  $('#btn-nuevo-parametro').addEventListener('click', () => editarParametro(null));
+
+  iniciar().catch((e) => { console.error(e); aviso('Error al iniciar: ' + e.message); });
+})();
