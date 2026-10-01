@@ -6,6 +6,9 @@
 (function () {
   'use strict';
   const cfg = window.JORNAL_CONFIG || {};
+  // Si la persona llega desde el correo de invitación o de recuperación, el enlace
+  // trae "type=invite" o "type=recovery"; se lee antes de que Supabase limpie la URL.
+  const TIPO_ENLACE = (/[#&?]type=(invite|recovery)/.exec(location.hash + location.search) || [])[1] || null;
   const MODO_DEMO = !cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY || !window.supabase;
 
   // ------------------------------------------------------------------
@@ -48,6 +51,20 @@
         return salida;
       },
       async rpc(nombre, args) { const { data, error } = await sb.rpc(nombre, args); fallo(error); return data; },
+      tipoEnlace: TIPO_ENLACE,
+      async cambiarClave(clave) { const { error } = await sb.auth.updateUser({ password: clave }); fallo(error); },
+      async recuperarClave(email, volverA) { const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: volverA }); fallo(error); },
+      async invitar(datos) {
+        const s = await this.sesion();
+        const r = await fetch(`${cfg.SUPABASE_URL}/functions/v1/invitar-usuario`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', apikey: cfg.SUPABASE_ANON_KEY, Authorization: `Bearer ${s ? s.access_token : cfg.SUPABASE_ANON_KEY}` },
+          body: JSON.stringify(datos),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || 'No se pudo enviar la invitación');
+        return j;
+      },
       async actualizar(tabla, id, cambios) { const { error } = await sb.from(tabla).update(cambios).eq('id', id); fallo(error); },
       async eliminar(tabla, id) { const { error } = await sb.from(tabla).delete().eq('id', id); fallo(error); },
       async guardarMarcaciones(filas) {
@@ -78,11 +95,17 @@
       demo: true,
       async sesion() { return { user: { email: 'demo@soporteti.co' } }; },
       async entrar() {}, async salir() {},
+      tipoEnlace: null,
+      async cambiarClave() {}, async recuperarClave() {},
+      async invitar(d) { (t.accesos = t.accesos || []).push({ usuario_id: 'u' + (++seq), email: d.email, nombre: d.nombre, rol: d.rol || 'cliente', empresa_id: d.empresa_id }); return { ok: true, estado: 'invitado', email: d.email }; },
       async perfil() { return { id: 'demo-user', email: 'demo@soporteti.co', nombre: 'Modo demo', rol: 'admin' }; },
       async rpc(nombre, args) {
         if (nombre === 'empresa_por_slug') return t.empresas.filter((e) => e.slug === String(args.p_slug).toLowerCase()).map((e) => ({ id: e.id, nombre: e.nombre }));
         if (nombre === 'usuarios_de_empresa') return (t.accesos || []).filter((a) => a.empresa_id === args.p_empresa);
         if (nombre === 'asignar_usuario_empresa') { (t.accesos = t.accesos || []).push({ usuario_id: 'u' + (++seq), email: args.p_email, rol: 'cliente', empresa_id: args.p_empresa }); return 'ok'; }
+        if (nombre === 'listar_usuarios') return (t.accesos || []).map((a) => ({ usuario_id: a.usuario_id, email: a.email, nombre: a.nombre || '', rol: a.rol, confirmado: false, empresas: t.empresas.filter((e) => e.id === a.empresa_id).map((e) => ({ id: e.id, nombre: e.nombre })) }));
+        if (nombre === 'cambiar_rol_usuario') { (t.accesos || []).filter((a) => a.usuario_id === args.p_usuario).forEach((a) => { a.rol = args.p_rol; }); return 'ok'; }
+        if (nombre === 'asignar_empresa_usuario') { const a = (t.accesos || []).find((x) => x.usuario_id === args.p_usuario); if (a) t.accesos.push({ ...a, empresa_id: args.p_empresa }); return 'ok'; }
         if (nombre === 'quitar_usuario_empresa') { t.accesos = (t.accesos || []).filter((a) => !(a.usuario_id === args.p_usuario && a.empresa_id === args.p_empresa)); return 'ok'; }
         return null;
       },

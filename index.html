@@ -21,7 +21,22 @@
     <input id="login-clave" type="password" autocomplete="current-password" required>
     <p id="login-error" class="error" hidden></p>
     <button class="btn btn-primario" type="submit">Entrar</button>
-    <p class="nota">Los usuarios se crean en Supabase → Authentication → Users.</p>
+    <button id="btn-olvide" class="btn btn-fantasma" type="button">Olvidé mi contraseña</button>
+    <p id="login-nota" class="nota">Si tu empresa usa Jornal, Soporte TI te envía una invitación a tu correo.</p>
+  </form>
+</div>
+
+<div id="pantalla-clave" class="login" hidden>
+  <form id="form-clave" class="login-caja">
+    <div class="marca"><span class="marca-sello">J</span><div><strong>Jornal</strong><small>Nómina y asistencia · Soporte TI</small></div></div>
+    <h2 id="clave-titulo">Crea tu contraseña</h2>
+    <p class="nota">Mínimo 8 caracteres. La usarás junto con tu correo para entrar a Jornal.</p>
+    <label for="clave-nueva">Contraseña nueva</label>
+    <input id="clave-nueva" type="password" autocomplete="new-password" minlength="8" required>
+    <label for="clave-repite">Repite la contraseña</label>
+    <input id="clave-repite" type="password" autocomplete="new-password" minlength="8" required>
+    <p id="clave-error" class="error" hidden></p>
+    <button class="btn btn-primario" type="submit">Guardar y entrar</button>
   </form>
 </div>
 
@@ -40,17 +55,30 @@
   </header>
 
   <nav class="pestanas" role="tablist">
-    <button role="tab" data-vista="liquidacion" class="activa">Liquidación</button>
+    <button role="tab" data-vista="tablero" class="activa">Tablero</button>
+    <button role="tab" data-vista="liquidacion">Liquidación</button>
     <button role="tab" data-vista="asistencia">Asistencia</button>
     <button role="tab" data-vista="empleados">Empleados</button>
     <button role="tab" data-vista="novedades">Novedades</button>
     <button role="tab" data-vista="empresas">Empresas</button>
     <button role="tab" data-vista="parametros">Parámetros legales</button>
+    <button role="tab" data-vista="usuarios">Usuarios</button>
   </nav>
 
   <main class="contenido">
+    <!-- TABLERO -->
+    <section id="vista-tablero" class="vista">
+      <div class="controles">
+        <div class="campo"><label for="tab-mes">Mes</label><input id="tab-mes" type="month"></div>
+        <div class="campo"><label for="tab-tramo">Periodo</label>
+          <select id="tab-tramo"><option value="q1">1ª quincena</option><option value="q2">2ª quincena</option><option value="mes">Mes completo</option></select></div>
+        <div class="campo campo-rango"><span class="eyebrow">Fechas</span><span id="tab-rango" class="mono"></span></div>
+      </div>
+      <div id="tablero" class="tablero"></div>
+    </section>
+
     <!-- LIQUIDACIÓN -->
-    <section id="vista-liquidacion" class="vista">
+    <section id="vista-liquidacion" class="vista" hidden>
       <div class="controles">
         <div class="campo"><label for="liq-mes">Mes</label><input id="liq-mes" type="month"></div>
         <div class="campo"><label for="liq-tramo">Periodo</label>
@@ -119,6 +147,23 @@
     <section id="vista-empresas" class="vista" hidden>
       <div class="encabezado-vista"><h2>Empresas cliente</h2><button id="btn-nueva-empresa" class="btn btn-primario" type="button">Agregar empresa</button></div>
       <div class="tabla-envoltura"><table id="tabla-empresas" class="tabla"></table></div>
+    </section>
+
+    <!-- USUARIOS (solo administrador) -->
+    <section id="vista-usuarios" class="vista" hidden>
+      <div class="panel">
+        <h2>Invitar usuario</h2>
+        <p class="nota">Le llega un correo para crear su contraseña. Un usuario de empresa solo ve la empresa que le asignes; tú y los técnicos ven todas.</p>
+        <form id="form-invitar" class="form-invitar">
+          <div class="campo"><label for="inv-email">Correo</label><input id="inv-email" type="email" required placeholder="nomina@empresa.com"></div>
+          <div class="campo"><label for="inv-nombre">Nombre</label><input id="inv-nombre" type="text" placeholder="Adriana Velásquez"></div>
+          <div class="campo"><label for="inv-empresa">Empresa</label><select id="inv-empresa"></select></div>
+          <div class="campo"><label for="inv-rol">Rol</label><select id="inv-rol">
+            <option value="cliente">Usuario de empresa</option><option value="tecnico">Técnico Soporte TI</option><option value="admin">Administrador</option></select></div>
+          <button class="btn btn-primario" type="submit" id="btn-invitar">Invitar</button>
+        </form>
+      </div>
+      <div class="tabla-envoltura"><table id="tabla-usuarios" class="tabla"></table></div>
     </section>
 
     <!-- PARÁMETROS -->

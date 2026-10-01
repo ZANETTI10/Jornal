@@ -158,6 +158,32 @@ input:focus-visible, select:focus-visible, button:focus-visible { outline: 2px s
 .alerta .sub { display: block; font-size: 0.8rem; }
 select:disabled { opacity: 1; background: transparent; border-color: transparent; font-weight: 600; appearance: none; padding-left: 0; }
 
+/* Tablero */
+.tablero { display: grid; gap: 18px; }
+.tablero-cabecera { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.tablero-cabecera h2 { margin-top: 2px; }
+.tablero-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; }
+.panel h3 { margin: 0; font-size: 1rem; }
+.columnas { display: flex; align-items: flex-end; gap: 3px; height: 180px; padding-top: 8px; border-bottom: 1px solid var(--linea); overflow-x: auto; }
+.col { flex: 1 0 14px; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; gap: 4px; position: relative; }
+.col-barra { width: 100%; max-width: 22px; background: var(--sello); border-radius: 4px 4px 0 0; opacity: 0.85; }
+.col-fest .col-barra { background: var(--aviso); }
+.col:hover .col-barra { opacity: 1; }
+.col-dia { font-family: var(--f-cifras); font-size: 0.68rem; color: var(--tinta-suave); position: absolute; bottom: -18px; }
+.columnas { margin-bottom: 20px; }
+.fila-barra { display: grid; grid-template-columns: minmax(0, 11rem) 1fr auto; align-items: center; gap: 10px; padding: 5px 0; font-size: 0.86rem; }
+.fila-nombre { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.fila-pista { height: 10px; background: var(--linea-suave); border-radius: 4px; overflow: hidden; }
+.fila-valor { display: block; height: 100%; background: var(--sello); border-radius: 4px; }
+.fila-num { font-family: var(--f-cifras); font-variant-numeric: tabular-nums; color: var(--tinta-suave); }
+
+/* Usuarios */
+.form-invitar { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+.form-invitar .campo { flex: 1 1 200px; }
+.quitar-chip { border: 0; background: none; color: inherit; cursor: pointer; font-size: 1rem; line-height: 1; padding: 0 0 0 4px; }
+.tabla select { min-height: 32px; padding: 4px 8px; width: auto; }
+.login-caja h2 { font-size: 1.15rem; }
+
 /* Festivos */
 .festivos { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 6px 18px; font-size: 0.88rem; }
 .festivos div { display: flex; gap: 10px; border-bottom: 1px dotted var(--linea); padding: 4px 0; }

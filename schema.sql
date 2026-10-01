@@ -25,8 +25,10 @@ create table if not exists public.usuarios_perfil (
 create or replace function public.crear_perfil_usuario()
 returns trigger language plpgsql security definer set search_path = public as $$
 begin
-  insert into public.usuarios_perfil (id, nombre)
-  values (new.id, coalesce(new.raw_user_meta_data->>'nombre', new.email))
+  insert into public.usuarios_perfil (id, nombre, rol)
+  values (new.id, coalesce(new.raw_user_meta_data->>'nombre', new.email),
+          -- dueño de Soporte TI: entra como administrador desde el primer momento
+          case when lower(new.email) = 'santiagoagudelofutbol@gmail.com' then 'admin' else 'cliente' end)
   on conflict (id) do nothing;
   return new;
 end $$;
@@ -360,3 +362,47 @@ grant execute on function public.asignar_usuario_empresa(text, uuid) to authenti
 grant execute on function public.quitar_usuario_empresa(uuid, uuid) to authenticated;
 grant execute on function public.usuarios_de_empresa(uuid) to authenticated;
 grant execute on function public.empresa_por_slug(text) to anon, authenticated;
+
+-- =====================================================================
+-- 10. Administración de usuarios desde la app (pestaña Usuarios)
+--     Las invitaciones por correo las hace la Edge Function
+--     supabase/functions/invitar-usuario (usa la llave de servicio).
+-- =====================================================================
+create or replace function public.listar_usuarios()
+returns table (usuario_id uuid, email text, nombre text, rol text, ultimo_ingreso timestamptz, invitado_en timestamptz, confirmado boolean, empresas jsonb)
+language sql stable security definer set search_path = public, auth as $$
+  select u.id, u.email::text, p.nombre, coalesce(p.rol, 'cliente'), u.last_sign_in_at, u.invited_at,
+         (u.email_confirmed_at is not null),
+         coalesce((select jsonb_agg(jsonb_build_object('id', e.id, 'nombre', e.nombre) order by e.nombre)
+                   from public.usuarios_empresas ue join public.empresas e on e.id = ue.empresa_id
+                   where ue.usuario_id = u.id), '[]'::jsonb)
+  from auth.users u left join public.usuarios_perfil p on p.id = u.id
+  where public.es_admin()
+  order by u.email;
+$$;
+
+create or replace function public.cambiar_rol_usuario(p_usuario uuid, p_rol text)
+returns text language plpgsql security definer set search_path = public as $$
+begin
+  if not public.es_admin() then raise exception 'Solo un administrador puede cambiar roles'; end if;
+  if p_rol not in ('admin','tecnico','cliente') then raise exception 'Rol no válido'; end if;
+  if p_usuario = auth.uid() and p_rol <> 'admin' then raise exception 'No puedes quitarte tu propio rol de administrador'; end if;
+  insert into public.usuarios_perfil (id, rol) values (p_usuario, p_rol)
+  on conflict (id) do update set rol = excluded.rol;
+  return 'ok';
+end $$;
+
+create or replace function public.asignar_empresa_usuario(p_usuario uuid, p_empresa uuid)
+returns text language plpgsql security definer set search_path = public as $$
+begin
+  if not public.es_admin() then raise exception 'Solo un administrador puede dar accesos'; end if;
+  insert into public.usuarios_empresas (usuario_id, empresa_id) values (p_usuario, p_empresa) on conflict do nothing;
+  return 'ok';
+end $$;
+
+revoke execute on function public.listar_usuarios() from public, anon;
+revoke execute on function public.cambiar_rol_usuario(uuid, text) from public, anon;
+revoke execute on function public.asignar_empresa_usuario(uuid, uuid) from public, anon;
+grant execute on function public.listar_usuarios() to authenticated;
+grant execute on function public.cambiar_rol_usuario(uuid, text) to authenticated;
+grant execute on function public.asignar_empresa_usuario(uuid, uuid) to authenticated;
