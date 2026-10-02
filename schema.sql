@@ -429,3 +429,64 @@ grant execute on function public.usuarios_jornal() to authenticated;
 -- Integración futura con el biométrico: foto y datos de huella/rostro/tarjeta del empleado
 alter table public.empleados add column if not exists foto_url text;
 alter table public.empleados add column if not exists datos_biometrico jsonb;
+
+-- =====================================================================
+-- 11. Endurecimiento de seguridad
+-- =====================================================================
+-- Funciones internas: nadie sin sesión puede llamarlas
+revoke execute on function public.es_admin() from public, anon;
+revoke execute on function public.es_staff() from public, anon;
+revoke execute on function public.puede_ver_empresa(uuid) from public, anon;
+revoke execute on function public.crear_perfil_usuario() from public, anon, authenticated;
+grant execute on function public.es_admin() to authenticated;
+grant execute on function public.es_staff() to authenticated;
+grant execute on function public.puede_ver_empresa(uuid) to authenticated;
+revoke execute on function public.listar_usuarios() from public, anon, authenticated;
+revoke execute on function public.asignar_usuario_empresa(text, uuid) from public, anon, authenticated;
+
+-- Registro de auditoría: quién cambió qué y cuándo (solo lo lee un administrador)
+create table if not exists public.auditoria (
+  id          bigint generated always as identity primary key,
+  fecha       timestamptz not null default now(),
+  usuario_id  uuid,
+  tabla       text not null,
+  operacion   text not null,
+  empresa_id  uuid,
+  registro    text,
+  antes       jsonb,
+  despues     jsonb
+);
+create index if not exists idx_auditoria_empresa_fecha on public.auditoria(empresa_id, fecha desc);
+alter table public.auditoria enable row level security;
+drop policy if exists auditoria_admin on public.auditoria;
+create policy auditoria_admin on public.auditoria for select to authenticated using (public.es_admin());
+
+create or replace function public.registrar_auditoria()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  v_antes   jsonb := case when tg_op <> 'INSERT' then to_jsonb(old) end;
+  v_despues jsonb := case when tg_op <> 'DELETE' then to_jsonb(new) end;
+  v_fila    jsonb := coalesce(v_despues, v_antes);
+begin
+  insert into public.auditoria (usuario_id, tabla, operacion, empresa_id, registro, antes, despues)
+  values (auth.uid(), tg_table_name, tg_op,
+          nullif(coalesce(v_fila->>'empresa_id', case when tg_table_name = 'empresas' then v_fila->>'id' end), '')::uuid,
+          coalesce(v_fila->>'id', v_fila->>'usuario_id'),
+          v_antes - 'resultado', v_despues - 'resultado');
+  return coalesce(new, old);
+end $$;
+revoke execute on function public.registrar_auditoria() from public, anon, authenticated;
+
+do $$
+declare t text;
+begin
+  foreach t in array array['empleados','novedades','periodos','empresas','dispositivos','usuarios_perfil','usuarios_empresas','parametros_legales'] loop
+    execute format('drop trigger if exists aud_%1$s on public.%1$s', t);
+    execute format('create trigger aud_%1$s after insert or update or delete on public.%1$s for each row execute function public.registrar_auditoria()', t);
+  end loop;
+end $$;
+-- Marcaciones: solo las manuales y cualquier modificación o borrado
+drop trigger if exists aud_marc_manual on public.marcaciones;
+create trigger aud_marc_manual after insert on public.marcaciones for each row when (new.origen = 'manual') execute function public.registrar_auditoria();
+drop trigger if exists aud_marc_cambios on public.marcaciones;
+create trigger aud_marc_cambios after update or delete on public.marcaciones for each row execute function public.registrar_auditoria();

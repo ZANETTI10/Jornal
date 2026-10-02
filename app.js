@@ -65,6 +65,7 @@
     // Las empresas cliente no administran empresas ni parámetros legales
     $$('[data-vista="empresas"], [data-vista="parametros"]').forEach((b) => { b.hidden = !esStaff(); });
     $$('[data-vista="usuarios"]').forEach((b) => { b.hidden = !esAdmin(); });
+    $$('[data-vista="admin"]').forEach((b) => { b.hidden = !esStaff(); });
     estado.parametros = await db.listar('parametros_legales', { order: 'vigente_desde' });
     await cargarEmpresas();
     if (!estado.empresas.length) {
@@ -132,17 +133,52 @@
   // ------------------------------------------------------------------
   // Pestañas
   // ------------------------------------------------------------------
-  let vistaActual = 'liquidacion';
+  let vistaActual = 'tablero', vistaAdmin = 'empresas';
+  const VISTAS_ADMIN = ['empresas', 'usuarios', 'parametros'];
   function mostrarVista(v) {
+    if (v === 'admin') v = vistaAdmin;
+    const enAdmin = VISTAS_ADMIN.includes(v);
+    if (enAdmin) vistaAdmin = v;
     vistaActual = v;
-    $$('.pestanas button').forEach((b) => b.classList.toggle('activa', b.dataset.vista === v));
-    $$('.vista').forEach((s) => { s.hidden = s.id !== 'vista-' + v; });
+    $$('.pestanas button').forEach((b) => {
+      const activa = b.dataset.vista === (enAdmin ? 'admin' : v);
+      b.classList.toggle('activa', activa);
+      if (activa) b.setAttribute('aria-current', 'page'); else b.removeAttribute('aria-current');
+    });
+    $('#subnav-admin').hidden = !enAdmin;
+    $$('#subnav-admin button').forEach((b) => b.classList.toggle('activa', b.dataset.vista === v));
+    $$('.vista').forEach((sec) => { sec.hidden = sec.id !== 'vista-' + v; });
+    window.scrollTo(0, 0);
     refrescarVistaActual();
   }
   function refrescarVistaActual() {
     ({ tablero: pintarTablero, empleados: pintarEmpleados, empresas: pintarEmpresas, novedades: pintarNovedades, parametros: pintarParametros, asistencia: verAsistencia, usuarios: pintarUsuarios }[vistaActual] || (() => {}))();
   }
-  $$('.pestanas button').forEach((b) => b.addEventListener('click', () => mostrarVista(b.dataset.vista)));
+  $$('.pestanas button, #subnav-admin button').forEach((b) => b.addEventListener('click', () => mostrarVista(b.dataset.vista)));
+
+  // En celular las tablas se muestran como tarjetas: cada celda lleva el nombre de su columna
+  const etiquetarTablas = () => $$('table.tabla').forEach((t) => {
+    const cab = [...t.querySelectorAll('thead th')].map((th) => th.textContent.trim());
+    if (!cab.length) return;
+    t.querySelectorAll('tbody tr, tfoot tr').forEach((tr) => [...tr.children].forEach((td, i) => { if (!td.hasAttribute('colspan') && !td.dataset.th) td.dataset.th = cab[i] || ''; }));
+  });
+  let etiquetarPendiente = false;
+  new MutationObserver(() => { if (etiquetarPendiente) return; etiquetarPendiente = true; requestAnimationFrame(() => { etiquetarPendiente = false; etiquetarTablas(); }); })
+    .observe(document.body, { childList: true, subtree: true });
+
+  // La librería de Excel pesa cerca de 900 KB: se descarga solo al importar o exportar
+  let promesaXLSX = null;
+  function cargarXLSX() {
+    if (window.XLSX) return Promise.resolve();
+    if (!promesaXLSX) promesaXLSX = new Promise((ok, mal) => {
+      const sc = document.createElement('script');
+      sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+      sc.onload = ok; sc.onerror = () => { promesaXLSX = null; mal(new Error('No se pudo cargar el lector de Excel. Revisa la conexión a internet.')); };
+      document.head.appendChild(sc);
+    });
+    return promesaXLSX;
+  }
+
 
   // ------------------------------------------------------------------
   // Periodo de liquidación
@@ -200,7 +236,15 @@
     });
   }
   // Liquidación de un periodo: la foto guardada si está cerrado, o el cálculo con los datos actuales
-  async function obtenerLiquidacion(empresa, r) {
+  const cacheLiq = new Map();
+  function obtenerLiquidacion(empresa, r) {
+    const k = `${empresa.id}|${r.inicio}|${r.fin}`;
+    if (!cacheLiq.has(k)) cacheLiq.set(k, calcularLiquidacion(empresa, r).catch((e) => { cacheLiq.delete(k); throw e; }));
+    return cacheLiq.get(k);
+  }
+  // Cuando cambian marcaciones, empleados, novedades o parámetros, lo calculado deja de servir
+  function invalidarDatos() { cacheLiq.clear(); limpiarLiquidacion(); }
+  async function calcularLiquidacion(empresa, r) {
     const periodos = await db.listar('periodos', { eq: { empresa_id: empresa.id, fecha_inicio: r.inicio, fecha_fin: r.fin } });
     const periodo = periodos[0] || null;
     if (periodo && periodo.estado === 'cerrado' && periodo.resultado) return { periodo, liquidacion: periodo.resultado, marcaciones: null };
@@ -298,10 +342,11 @@
     $('#tab-rango').textContent = r ? `${fechaLarga(r.inicio)} → ${fechaLarga(r.fin)}` : '—';
     if (!empresa) { cont.innerHTML = $('#liq-vacio').innerHTML; return; }
     const yo = ++tableroPeticion;
-    cont.innerHTML = '<p class="nota">Calculando…</p>';
+    cont.innerHTML = '<p class="nota" role="status">Calculando…</p>';
     const rAnt = periodoAnterior(r);
     const datos = await intentar(() => Promise.all([obtenerLiquidacion(empresa, r), obtenerLiquidacion(empresa, rAnt)]));
-    if (yo !== tableroPeticion || !datos) return;
+    if (yo !== tableroPeticion) return;
+    if (!datos) { cont.innerHTML = '<div class="vacio"><h2>No se pudo cargar el tablero</h2><p>Revisa la conexión a internet y vuelve a entrar a esta sección.</p></div>'; return; }
     const [res, resAnt] = datos;
     const L = res.liquidacion, E = L.empleados;
     const m = metricas(L, r), a = metricas(resAnt.liquidacion, rAnt);
@@ -359,41 +404,54 @@
     ].filter(Boolean).join('') || '<p class="nota">Sin alertas en este periodo.</p>';
 
     cont.innerHTML = `
-      <div class="tablero-cabecera"><div><span class="eyebrow">${esc(empresa.nombre)} · Tablero gerencial</span>
+      <div class="tablero-cabecera"><div><span class="eyebrow">${esc(empresa.nombre)}</span>
         <h2>${fechaLarga(r.inicio)} a ${fechaLarga(r.fin)}</h2></div>
         ${cerrado ? '<span class="chip chip-ok">Periodo cerrado</span>' : '<span class="chip">Periodo en curso · cifras estimadas</span>'}</div>
       <div class="resumen">
         <div class="cifra destacada"><span class="eyebrow">Costo laboral total</span><b>${$f(m.costo)}</b>${d(m.costo, a.costo, true)}</div>
         <div class="cifra"><span class="eyebrow">Neto a pagar</span><b>${$f(m.neto)}</b><small>${m.personas} empleados</small></div>
-        <div class="cifra"><span class="eyebrow">Costo por hora trabajada</span><b>${$f(m.costoHora)}</b>${d(m.costoHora, a.costoHora, true)}</div>
-        <div class="cifra"><span class="eyebrow">Horas extra</span><b>${h2(m.hExtra)} h</b>${d(m.hExtra, a.hExtra, true)}</div>
-        <div class="cifra"><span class="eyebrow">Costo de extras y recargos</span><b>${$f(m.vExtra + m.vRec)}</b><small>${m.devengado ? Math.round(((m.vExtra + m.vRec) / m.devengado) * 100) : 0} % de lo devengado</small></div>
+        <div class="cifra"><span class="eyebrow">Horas extra</span><b>${h2(m.hExtra)} h</b><small>${$f(m.vExtra)} · ${m.horas ? Math.round((m.hExtra / m.horas) * 100) : 0} % de las horas</small></div>
         <div class="cifra"><span class="eyebrow">Asistencia estimada</span><b>${Math.round(m.asistencia * 100)} %</b><small>${m.conMarcas} de ${m.personas} personas marcaron</small></div>
       </div>
+      <div class="panel"><h3>Para revisar</h3><div class="alertas">${alertas}</div></div>
       <div class="tablero-grid">
-        <div class="panel"><h3>En qué se va el costo laboral</h3><p class="nota">Lo que le cuesta el periodo a la empresa, incluido lo que no se le paga directo al trabajador.</p>${composicion}</div>
-        <div class="panel"><h3>Horas trabajadas por tipo</h3><p class="nota">${h2(m.horas)} horas en total. Las extra son el ${m.horas ? Math.round((m.hExtra / m.horas) * 100) : 0} %.</p>${tipos}</div>
-        <div class="panel"><h3>Horas trabajadas por día</h3><p class="nota">Todas las personas. Domingos y festivos resaltados.</p>
+        <div class="panel"><h3>En qué se va el costo laboral</h3>${composicion}</div>
+        <div class="panel"><h3>Horas trabajadas por día</h3>
+          <div class="leyenda"><span><i></i>Día normal</span><span><i class="fest"></i>Domingo o festivo</span></div>
           <div class="columnas" role="img" aria-label="Horas trabajadas por día">${barrasDia}</div></div>
         <div class="panel"><h3>Quién concentra las horas extra</h3>${top.length ? `<p class="nota">Las 3 primeras personas hacen el ${Math.round((top3 / (m.hExtra || 1)) * 100)} % de las horas extra.</p>` : ''}${barrasExt}</div>
-        <div class="panel"><h3>Costo laboral de los últimos periodos</h3><p class="nota">Costo total de la empresa por periodo.</p>
-          <div id="tendencia" class="columnas columnas-anchas" role="img" aria-label="Costo laboral por periodo"><p class="nota">Calculando…</p></div></div>
-        <div class="panel"><h3>Alertas para gerencia</h3><div class="alertas">${alertas}</div></div>
-      </div>`;
+      </div>
+      <details class="mas-detalle" id="mas-detalle"><summary>Ver más detalle</summary>
+        <div class="tablero-grid">
+          <div class="panel"><h3>Horas trabajadas por tipo</h3><p class="nota">${h2(m.horas)} horas en total.</p>${tipos}</div>
+          <div class="panel"><h3>Otros indicadores</h3><div class="lineas">
+            <div><span>Costo por hora trabajada</span><span>${$f(m.costoHora)}</span></div>
+            <div><span>Recargos nocturnos y dominicales</span><span>${$f(m.vRec)}</span></div>
+            <div><span>Extras y recargos sobre lo devengado</span><span>${m.devengado ? Math.round(((m.vExtra + m.vRec) / m.devengado) * 100) : 0} %</span></div>
+            <div><span>Aportes y prestaciones</span><span>${$f(m.aportes + m.provisiones)}</span></div></div></div>
+          <div class="panel"><h3>Costo laboral de los últimos periodos</h3>
+            <div id="tendencia" class="columnas columnas-anchas" role="img" aria-label="Costo laboral por periodo"><p class="nota">Calculando…</p></div></div>
+        </div>
+      </details>`;
     cont.querySelectorAll('[data-ir]').forEach((b) => b.addEventListener('click', () => {
       if (b.dataset.ir === 'asistencia') { $('#asis-desde').value = r.inicio; $('#asis-hasta').value = r.fin; }
       mostrarVista(b.dataset.ir);
     }));
 
-    // Tendencia: los 6 últimos periodos (se calcula después para no demorar el tablero)
-    const periodos = [r, rAnt]; while (periodos.length < 6) periodos.push(periodoAnterior(periodos[periodos.length - 1]));
-    const previos = await intentar(() => Promise.all(periodos.slice(2).map((p) => obtenerLiquidacion(empresa, p))));
-    if (yo !== tableroPeticion || !previos) return;
-    const serie = [L, resAnt.liquidacion, ...previos.map((x) => x.liquidacion)].map((liq, i) => ({ r: periodos[i], costo: liq.empleados.some((e) => e.detalleDias.length) ? liq.totales.costo : 0 })).reverse();
-    const maxC = Math.max(1, ...serie.map((x) => x.costo));
-    $('#tendencia').innerHTML = serie.map((x, i) => `<div class="col${i === serie.length - 1 ? ' col-actual' : ''}" title="${etiquetaPeriodo(x.r)}: ${x.costo ? $f(x.costo) : 'sin marcaciones'}">
-      <span class="col-valor">${x.costo ? '$' + (x.costo / 1e6).toLocaleString('es-CO', { maximumFractionDigits: 1 }) + ' M' : '—'}</span>
-      <span class="col-barra" style="height:${x.costo ? Math.max(3, (x.costo / maxC) * 82) : 0}%"></span><span class="col-dia">${etiquetaPeriodo(x.r)}</span></div>`).join('');
+    // La tendencia de 6 periodos solo se calcula si la persona abre "Ver más detalle"
+    let tendenciaLista = false;
+    $('#mas-detalle').addEventListener('toggle', async (ev) => {
+      if (!ev.target.open || tendenciaLista) return;
+      tendenciaLista = true;
+      const periodos = [r, rAnt]; while (periodos.length < 6) periodos.push(periodoAnterior(periodos[periodos.length - 1]));
+      const previos = await intentar(() => Promise.all(periodos.slice(2).map((p) => obtenerLiquidacion(empresa, p))));
+      if (yo !== tableroPeticion || !previos || !$('#tendencia')) return;
+      const serie = [L, resAnt.liquidacion, ...previos.map((x) => x.liquidacion)].map((liq, i) => ({ r: periodos[i], costo: liq.empleados.some((e) => e.detalleDias.length) ? liq.totales.costo : 0 })).reverse();
+      const maxC = Math.max(1, ...serie.map((x) => x.costo));
+      $('#tendencia').innerHTML = serie.map((x, i) => `<div class="col${i === serie.length - 1 ? ' col-actual' : ''}" title="${etiquetaPeriodo(x.r)}: ${x.costo ? $f(x.costo) : 'sin marcaciones'}">
+        <span class="col-valor">${x.costo ? '$' + (x.costo / 1e6).toLocaleString('es-CO', { maximumFractionDigits: 1 }) + ' M' : '—'}</span>
+        <span class="col-barra" style="height:${x.costo ? Math.max(3, (x.costo / maxC) * 82) : 0}%"></span><span class="col-dia">${etiquetaPeriodo(x.r)}</span></div>`).join('');
+    });
   }
 
   $('#btn-calcular').addEventListener('click', calcular);
@@ -493,14 +551,15 @@
         const datos = { estado: 'cerrado', resultado: L, cerrado_en: new Date().toISOString() };
         if (estado.periodo) await db.actualizar('periodos', estado.periodo.id, datos);
         else await db.insertar('periodos', [{ empresa_id: estado.empresaId, fecha_inicio: L.inicio, fecha_fin: L.fin, ...datos }]);
-        aviso('Periodo cerrado'); await calcular();
+        cacheLiq.clear(); aviso('Periodo cerrado'); await calcular();
       },
     });
   });
 
   // Exportar a Excel
-  $('#btn-excel').addEventListener('click', () => {
-    const L = estado.liquidacion; if (!L || !window.XLSX) return;
+  $('#btn-excel').addEventListener('click', async () => {
+    const L = estado.liquidacion; if (!L) return;
+    try { await cargarXLSX(); } catch (e) { aviso(e.message); return; }
     const resumen = L.empleados.map((e) => ({
       Documento: e.documento, Empleado: e.nombre, Cargo: e.cargo, Salario: e.salario, Días: e.dias,
       'H. ordinarias': e.horas.ORD, 'H. recargo nocturno': e.horas.RN, 'H. dominical/festivo': e.horas.RDF, 'H. nocturna dom/fest': e.horas.RNDF,
@@ -546,7 +605,7 @@
   async function leerArchivo(archivo) {
     const nombre = archivo.name.toLowerCase();
     if (/\.(xls|xlsx|xlsm|ods)$/.test(nombre)) {
-      if (!window.XLSX) throw new Error('No se pudo cargar el lector de Excel. Revisa la conexión a internet.');
+      await cargarXLSX();
       const libro = XLSX.read(new Uint8Array(await leerBuffer(archivo)), { type: 'array' });
       const filas = XLSX.utils.sheet_to_json(libro.Sheets[libro.SheetNames[0]], { header: 1, raw: false, defval: '' });
       return C.leerFilasBiometrico(filas);
@@ -608,7 +667,7 @@
       $('#asis-desde').value = fs[0].slice(0, 10); $('#asis-hasta').value = fs[fs.length - 1].slice(0, 10);
       pendientes = []; nuevosEmpleados = [];
       $('#archivo-bio').value = ''; $('#import-previa').hidden = true; btn.hidden = true;
-      limpiarLiquidacion(); verAsistencia();
+      invalidarDatos(); verAsistencia();
     } finally { btn.disabled = false; btn.textContent = 'Guardar marcaciones'; }
   }));
 
@@ -619,7 +678,7 @@
       if (!e) return;
       if (!e.codigo_biometrico) { aviso('Ese empleado no tiene código de biométrico en su ficha.'); return; }
       await db.insertar('marcaciones', [{ empresa_id: estado.empresaId, empleado_id: e.id, codigo_biometrico: String(e.codigo_biometrico), fecha_hora: $('#man-fecha').value.replace('T', ' ') + ':00', origen: 'manual', anulada: false, observacion: $('#man-obs').value || null }]);
-      aviso('Marcación agregada'); $('#man-obs').value = ''; limpiarLiquidacion(); verAsistencia();
+      aviso('Marcación agregada'); $('#man-obs').value = ''; invalidarDatos(); verAsistencia();
     });
   });
 
@@ -736,9 +795,9 @@
         d.arl_riesgo = +d.arl_riesgo;
         if (emp) await db.actualizar('empleados', emp.id, d);
         else await db.insertar('empleados', [{ ...d, empresa_id: estado.empresaId }]);
-        aviso('Empleado guardado'); await cargarEmpleados(); pintarEmpleados(); limpiarLiquidacion();
+        aviso('Empleado guardado'); await cargarEmpleados(); pintarEmpleados(); invalidarDatos();
       },
-      alEliminar: emp ? async () => { await db.eliminar('empleados', emp.id); aviso('Empleado eliminado'); await cargarEmpleados(); pintarEmpleados(); } : null,
+      alEliminar: emp ? async () => { await db.eliminar('empleados', emp.id); aviso('Empleado eliminado'); await cargarEmpleados(); pintarEmpleados(); invalidarDatos(); } : null,
     });
   }
   $('#btn-nuevo-empleado').addEventListener('click', () => { if (!estado.empresaId) { aviso('Agrega primero una empresa.'); return; } editarEmpleado(null); });
@@ -913,9 +972,9 @@
       alGuardar: async (d) => {
         d.valor = d.valor || 0; d.dias = d.dias || 0;
         if (nov) await db.actualizar('novedades', nov.id, d); else await db.insertar('novedades', [{ ...d, empresa_id: estado.empresaId }]);
-        aviso('Novedad guardada'); limpiarLiquidacion(); pintarNovedades();
+        aviso('Novedad guardada'); invalidarDatos(); pintarNovedades();
       },
-      alEliminar: nov ? async () => { await db.eliminar('novedades', nov.id); aviso('Novedad eliminada'); limpiarLiquidacion(); pintarNovedades(); } : null,
+      alEliminar: nov ? async () => { await db.eliminar('novedades', nov.id); aviso('Novedad eliminada'); invalidarDatos(); pintarNovedades(); } : null,
     });
   }
   $('#btn-nueva-novedad').addEventListener('click', () => { if (!estado.empleados.length) { aviso('Agrega primero empleados.'); return; } editarNovedad(null); });
@@ -961,12 +1020,23 @@
       alGuardar: async (d) => {
         if (p) await db.actualizar('parametros_legales', p.id, d); else await db.insertar('parametros_legales', [d]);
         estado.parametros = await db.listar('parametros_legales', { order: 'vigente_desde' });
-        aviso('Parámetros guardados'); limpiarLiquidacion(); pintarParametros();
+        aviso('Parámetros guardados'); invalidarDatos(); pintarParametros();
       },
       alEliminar: p ? async () => { await db.eliminar('parametros_legales', p.id); estado.parametros = await db.listar('parametros_legales', { order: 'vigente_desde' }); pintarParametros(); } : null,
     });
   }
   $('#btn-nuevo-parametro').addEventListener('click', () => editarParametro(null));
+
+  // ------------------------------------------------------------------
+  // Cierre de sesión por inactividad (30 minutos sin tocar la app)
+  // ------------------------------------------------------------------
+  const MIN_INACTIVIDAD = 30;
+  let ultimaActividad = Date.now();
+  ['pointerdown', 'keydown', 'scroll', 'touchstart'].forEach((ev) => window.addEventListener(ev, () => { ultimaActividad = Date.now(); }, { passive: true, capture: true }));
+  setInterval(async () => {
+    if (db.demo || $('#app').hidden) return;
+    if (Date.now() - ultimaActividad > MIN_INACTIVIDAD * 60000) { await db.salir(); location.reload(); }
+  }, 60000);
 
   iniciar().catch((e) => { console.error(e); aviso('Error al iniciar: ' + e.message); });
 })();

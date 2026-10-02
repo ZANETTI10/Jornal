@@ -3,14 +3,15 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline'; connect-src https://klsomxbzefbqugotglmh.supabase.co wss://klsomxbzefbqugotglmh.supabase.co; img-src 'self' data: blob:; object-src 'none'; base-uri 'self'; form-action 'self'">
+<meta name="referrer" content="no-referrer">
+<meta name="theme-color" content="#1b222c">
 <title>Jornal</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=20261002d">
 </head>
 <body>
 <!--CUERPO-->
+<a class="saltar" href="#contenido">Ir al contenido</a>
 <div id="pantalla-login" class="login" hidden>
   <form id="form-login" class="login-caja">
     <div class="marca"><span class="marca-sello">J</span><div><strong>Jornal</strong><small>Nómina y asistencia · Soporte TI</small></div></div>
@@ -53,18 +54,21 @@
     </div>
   </header>
 
-  <nav class="pestanas" role="tablist">
-    <button role="tab" data-vista="tablero" class="activa">Tablero</button>
-    <button role="tab" data-vista="liquidacion">Liquidación</button>
-    <button role="tab" data-vista="asistencia">Asistencia</button>
-    <button role="tab" data-vista="empleados">Empleados</button>
-    <button role="tab" data-vista="novedades">Novedades</button>
-    <button role="tab" data-vista="empresas">Empresas</button>
-    <button role="tab" data-vista="parametros">Parámetros legales</button>
-    <button role="tab" data-vista="usuarios">Usuarios</button>
+  <nav class="pestanas" aria-label="Secciones">
+    <button type="button" data-vista="tablero" class="activa" aria-current="page">Tablero</button>
+    <button type="button" data-vista="asistencia">Asistencia</button>
+    <button type="button" data-vista="empleados">Empleados</button>
+    <button type="button" data-vista="novedades">Novedades</button>
+    <button type="button" data-vista="liquidacion">Nómina</button>
+    <button type="button" data-vista="admin">Ajustes</button>
   </nav>
 
-  <main class="contenido">
+  <main class="contenido" id="contenido" tabindex="-1">
+    <div id="subnav-admin" class="subnav" aria-label="Administración" hidden>
+      <button type="button" data-vista="empresas">Empresas</button>
+      <button type="button" data-vista="usuarios">Usuarios</button>
+      <button type="button" data-vista="parametros">Parámetros legales</button>
+    </div>
     <!-- TABLERO -->
     <section id="vista-tablero" class="vista">
       <div class="controles">
@@ -194,10 +198,9 @@
 <!--/CUERPO-->
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-<script src="config.js"></script>
-<script src="calculo.js"></script>
-<script src="datos.js"></script>
-<script src="app.js"></script>
+<script src="config.js?v=20261002d"></script>
+<script src="calculo.js?v=20261002d"></script>
+<script src="datos.js?v=20261002d"></script>
+<script src="app.js?v=20261002d"></script>
 </body>
 </html>
