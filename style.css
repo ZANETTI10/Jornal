@@ -226,3 +226,13 @@ select:disabled { opacity: 1; background: transparent; border-color: transparent
   .campo { flex: 1 1 140px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+/* Ajustes del tablero gerencial: barras con el nombre completo arriba y la pista debajo */
+.tablero-grid { grid-template-columns: repeat(auto-fit, minmax(min(100%, 420px), 1fr)); }
+.fila-barra { grid-template-columns: minmax(0, 1fr) auto; gap: 3px 10px; padding: 6px 0; }
+.fila-nombre { grid-column: 1; grid-row: 1; }
+.fila-num { grid-column: 2; grid-row: 1; white-space: nowrap; }
+.fila-pista { grid-column: 1 / -1; grid-row: 2; height: 8px; }
+.columnas { overflow: visible; gap: 2px; }
+.col { flex: 1 1 0; min-width: 0; }
+.col-dia { font-size: 0.62rem; }
