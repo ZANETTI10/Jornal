@@ -21,6 +21,7 @@
   const enlaceEmpresa = (e) => `${location.origin}${location.pathname}?empresa=${encodeURIComponent(e.slug)}`;
   const hacerSlug = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
     .replace(/\(.*?\)/g, '').replace(/s\.?a\.?s\.?|ltda\.?/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  const claveFuerte = (c) => typeof c === 'string' && c.length >= 10 && /[A-Za-z]/.test(c) && /\d/.test(c);
   const estado = { perfil: null, empresas: [], empresaId: null, empleados: [], parametros: [], liquidacion: null, periodo: null, seleccionado: null };
   const empresaActual = () => estado.empresas.find((e) => e.id === estado.empresaId);
   const nombreEmpleado = (e) => (e ? `${e.nombres} ${e.apellidos || ''}`.trim() : 'Sin asignar');
@@ -89,7 +90,7 @@
     ev.preventDefault();
     const err = $('#clave-error'); err.hidden = true;
     const a = $('#clave-nueva').value, b = $('#clave-repite').value;
-    if (a.length < 8) { err.textContent = 'La contraseña debe tener al menos 8 caracteres.'; err.hidden = false; return; }
+    if (!claveFuerte(a)) { err.textContent = 'La contraseña debe tener al menos 10 caracteres, con letras y números.'; err.hidden = false; return; }
     if (a !== b) { err.textContent = 'Las dos contraseñas no coinciden.'; err.hidden = false; return; }
     try {
       await db.cambiarClave(a);
@@ -98,7 +99,7 @@
       aviso('Contraseña actualizada'); iniciar();
     } catch (e) {
       const igual = /different from the old|same/i.test(e.message);
-      err.textContent = igual ? 'La contraseña nueva debe ser distinta a la temporal.' : 'No se pudo guardar: ' + e.message; err.hidden = false;
+      err.textContent = igual ? 'La contraseña nueva debe ser distinta a la temporal.' : /weak|at least|should contain/i.test(e.message) ? 'La contraseña debe tener al menos 10 caracteres, con letras y números.' : 'No se pudo guardar: ' + e.message; err.hidden = false;
     }
   });
 
@@ -912,7 +913,7 @@
       titulo: `Restablecer contraseña · ${b.dataset.nombre}`,
       campos: [
         { tipo: 'texto', html: '<p class="ancho nota">Pon una contraseña temporal y dásela a la persona. Al entrar, Jornal le pedirá cambiarla.</p>' },
-        { nombre: 'clave', etiqueta: 'Contraseña temporal (mínimo 8 caracteres)', requerido: true, ancho: true },
+        { nombre: 'clave', etiqueta: 'Contraseña temporal (mínimo 10 caracteres, con letras y números)', requerido: true, ancho: true },
       ],
       textoGuardar: 'Restablecer',
       alGuardar: async (d) => { await db.gestionarUsuarios({ accion: 'clave', usuario_id: b.dataset.clave, clave: d.clave }); aviso('Contraseña temporal asignada'); pintarUsuarios(); },
@@ -932,7 +933,7 @@
         const rol = $('#nu-rol').value, empresa_id = $('#nu-empresa').value || null;
         if (rol === 'cliente' && !empresa_id) { aviso('Elige la empresa a la que pertenece este usuario.'); return; }
         const clave = $('#nu-clave').value;
-        if (clave.length < 8) { aviso('La contraseña temporal debe tener al menos 8 caracteres.'); return; }
+        if (!claveFuerte(clave)) { aviso('La contraseña temporal debe tener al menos 10 caracteres, con letras y números.'); return; }
         const r = await db.gestionarUsuarios({ accion: 'crear', usuario: $('#nu-usuario').value.trim(), nombre: $('#nu-nombre').value.trim() || undefined, clave, rol, empresa_id });
         aviso(`Usuario "${r.usuario}" creado. Entra con ese usuario y la contraseña temporal.`);
         ['#nu-usuario', '#nu-nombre', '#nu-clave'].forEach((id) => { $(id).value = ''; });

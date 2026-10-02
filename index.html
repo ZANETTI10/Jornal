@@ -7,7 +7,7 @@
 <meta name="referrer" content="no-referrer">
 <meta name="theme-color" content="#1b222c">
 <title>Jornal</title>
-<link rel="stylesheet" href="style.css?v=20261002d">
+<link rel="stylesheet" href="style.css?v=20261002e">
 </head>
 <body>
 <!--CUERPO-->
@@ -30,11 +30,11 @@
   <form id="form-clave" class="login-caja">
     <div class="marca"><span class="marca-sello">J</span><div><strong>Jornal</strong><small>Nómina y asistencia · Soporte TI</small></div></div>
     <h2 id="clave-titulo">Cambia tu contraseña</h2>
-    <p class="nota">Estás usando una contraseña temporal. Crea una nueva de mínimo 8 caracteres; solo tú la vas a conocer.</p>
+    <p class="nota">Estás usando una contraseña temporal. Crea una nueva de mínimo 10 caracteres, con letras y números; solo tú la vas a conocer.</p>
     <label for="clave-nueva">Contraseña nueva</label>
-    <input id="clave-nueva" type="password" autocomplete="new-password" minlength="8" required>
+    <input id="clave-nueva" type="password" autocomplete="new-password" minlength="10" required>
     <label for="clave-repite">Repite la contraseña</label>
-    <input id="clave-repite" type="password" autocomplete="new-password" minlength="8" required>
+    <input id="clave-repite" type="password" autocomplete="new-password" minlength="10" required>
     <p id="clave-error" class="error" hidden></p>
     <button class="btn btn-primario" type="submit">Guardar y entrar</button>
   </form>
@@ -160,7 +160,7 @@
         <form id="form-usuario" class="form-invitar">
           <div class="campo"><label for="nu-usuario">Usuario</label><input id="nu-usuario" type="text" required placeholder="Temporal 1" autocomplete="off"></div>
           <div class="campo"><label for="nu-nombre">Nombre</label><input id="nu-nombre" type="text" placeholder="Nómina La Rufina" autocomplete="off"></div>
-          <div class="campo"><label for="nu-clave">Contraseña temporal</label><input id="nu-clave" type="text" required minlength="8" autocomplete="off"></div>
+          <div class="campo"><label for="nu-clave">Contraseña temporal</label><input id="nu-clave" type="text" required minlength="10" autocomplete="off"></div>
           <div class="campo"><label for="nu-rol">Rol</label><select id="nu-rol">
             <option value="cliente">Usuario de empresa</option><option value="tecnico">Técnico Soporte TI</option><option value="admin">Administrador</option></select></div>
           <div class="campo"><label for="nu-empresa">Empresa</label><select id="nu-empresa"></select></div>
@@ -198,9 +198,9 @@
 <!--/CUERPO-->
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-<script src="config.js?v=20261002d"></script>
-<script src="calculo.js?v=20261002d"></script>
-<script src="datos.js?v=20261002d"></script>
-<script src="app.js?v=20261002d"></script>
+<script src="config.js?v=20261002e"></script>
+<script src="calculo.js?v=20261002e"></script>
+<script src="datos.js?v=20261002e"></script>
+<script src="app.js?v=20261002e"></script>
 </body>
 </html>
