@@ -51,14 +51,13 @@
       return;
     }
     $('#pantalla-login').hidden = true;
-    if (db.tipoEnlace && !estado.claveLista) {
-      // llegó desde el correo: primero crea su contraseña
-      $('#clave-titulo').textContent = db.tipoEnlace === 'recovery' ? 'Crea una contraseña nueva' : 'Bienvenido a Jornal: crea tu contraseña';
+    estado.perfil = await db.perfil();
+    if (estado.perfil.debeCambiar && !estado.claveLista) {
+      // contraseña temporal asignada por el administrador: debe cambiarla antes de seguir
       $('#pantalla-clave').hidden = false; $('#app').hidden = true;
       return;
     }
     $('#pantalla-clave').hidden = true; $('#app').hidden = false;
-    estado.perfil = await db.perfil();
     const ROLES = { admin: 'Administrador', tecnico: 'Técnico', cliente: 'Empresa' };
     $('#usuario-nombre').textContent = `${estado.perfil.nombre} · ${ROLES[estado.perfil.rol] || estado.perfil.rol}`;
     $('#chip-demo').hidden = !db.demo;
@@ -81,7 +80,7 @@
     ev.preventDefault();
     const err = $('#login-error'); err.hidden = true;
     try { await db.entrar($('#login-email').value.trim(), $('#login-clave').value); iniciar(); }
-    catch (e) { err.textContent = 'Correo o contraseña incorrectos.'; err.hidden = false; }
+    catch (e) { err.textContent = 'Usuario o contraseña incorrectos.'; err.hidden = false; }
   });
   $('#btn-salir').addEventListener('click', async () => { await db.salir(); location.reload(); });
 
@@ -94,18 +93,12 @@
     try {
       await db.cambiarClave(a);
       estado.claveLista = true;
-      history.replaceState(null, '', location.pathname + location.search);
-      aviso('Contraseña guardada'); iniciar();
-    } catch (e) { err.textContent = 'No se pudo guardar: ' + e.message + '. Si el enlace del correo ya venció, pide uno nuevo con "Olvidé mi contraseña".'; err.hidden = false; }
-  });
-  $('#btn-olvide').addEventListener('click', async () => {
-    const email = $('#login-email').value.trim();
-    const err = $('#login-error');
-    if (!email) { err.textContent = 'Escribe tu correo arriba y vuelve a tocar "Olvidé mi contraseña".'; err.hidden = false; return; }
-    try {
-      await db.recuperarClave(email, location.origin + location.pathname + location.search);
-      err.hidden = true; $('#login-nota').textContent = `Si ${email} tiene acceso a Jornal, le llegará un correo para crear una contraseña nueva. Revisa también la carpeta de spam.`;
-    } catch (e) { err.textContent = 'No se pudo enviar el correo: ' + e.message; err.hidden = false; }
+      $('#clave-nueva').value = ''; $('#clave-repite').value = '';
+      aviso('Contraseña actualizada'); iniciar();
+    } catch (e) {
+      const igual = /different from the old|same/i.test(e.message);
+      err.textContent = igual ? 'La contraseña nueva debe ser distinta a la temporal.' : 'No se pudo guardar: ' + e.message; err.hidden = false;
+    }
   });
 
   async function cargarEmpresas() {
@@ -223,8 +216,81 @@
   }
 
   // ------------------------------------------------------------------
-  // Tablero de la empresa
+  // Tablero gerencial de la empresa
   // ------------------------------------------------------------------
+  const EXT = ['HED', 'HEN', 'HEDDF', 'HENDF'], REC = ['RN', 'RDF', 'RNDF'];
+  const TOPE_EXTRA_DIA = 2, TOPE_EXTRA_SEMANA = 12;      // máximo legal de horas extra (CST art. 22 Ley 50/1990)
+
+  function periodoAnterior(r) {
+    const ini = C.aFecha(r.inicio);
+    const finAnt = C.isoDia(C.sumarDias(ini, -1));
+    if (ini.getUTCDate() === 16) return { inicio: r.inicio.slice(0, 8) + '01', fin: finAnt };
+    if (C.dias360(r.inicio, r.fin) <= 15) return { inicio: finAnt.slice(0, 8) + '16', fin: finAnt };
+    return { inicio: finAnt.slice(0, 8) + '01', fin: finAnt };
+  }
+  const etiquetaPeriodo = (r) => {
+    const mes = MESES[+r.inicio.slice(5, 7) - 1].slice(0, 3);
+    if (r.inicio.slice(8) === '16') return `2Q ${mes}`;
+    return C.dias360(r.inicio, r.fin) <= 15 ? `1Q ${mes}` : mes;
+  };
+
+  function metricas(L, r) {
+    const E = L.empleados; const suma = (f) => E.reduce((s, e) => s + f(e), 0);
+    const horas = suma((e) => Object.values(e.horas).reduce((a, b) => a + b, 0));
+    const hExtra = suma((e) => EXT.reduce((a, c) => a + e.horas[c], 0));
+    const vExtra = suma((e) => EXT.reduce((a, c) => a + e.valores[c], 0));
+    const vRec = suma((e) => REC.reduce((a, c) => a + e.valores[c], 0));
+    // Asistencia estimada: días con marcación frente a los días laborales esperados
+    const diasCal = Math.round((C.aFecha(r.fin) - C.aFecha(r.inicio)) / 86400000) + 1;
+    const dias360 = C.dias360(r.inicio, r.fin) || 1;
+    const fichas = new Map(estado.empleados.map((e) => [e.id, e]));
+    let esperados = 0, asistidos = 0;
+    // Topes legales de horas extra
+    let diasSobreTope = 0; const sobreDia = new Set(), sobreSemana = new Set();
+    E.forEach((e) => {
+      const dl = +(fichas.get(e.empleado_id) || {}).dias_laborales_semana || 6;
+      const esp = diasCal * (dl / 7) * Math.min(1, e.dias / dias360);
+      esperados += esp; asistidos += Math.min(e.detalleDias.length, esp);
+      const semanas = {};
+      e.detalleDias.forEach((d) => {
+        const x = EXT.reduce((a, c) => a + (d.horas[c] || 0), 0);
+        if (x > TOPE_EXTRA_DIA + 0.01) { diasSobreTope += 1; sobreDia.add(e.nombre); }
+        const f = C.aFecha(d.fecha); const lunes = C.isoDia(C.sumarDias(f, -((f.getUTCDay() + 6) % 7)));
+        semanas[lunes] = (semanas[lunes] || 0) + x;
+      });
+      if (Object.values(semanas).some((v) => v > TOPE_EXTRA_SEMANA + 0.01)) sobreSemana.add(e.nombre);
+    });
+    return {
+      diasCal, diasConDatos: new Set(E.flatMap((e) => e.detalleDias.map((x) => x.fecha))).size,
+      personas: E.length, conMarcas: E.filter((e) => e.detalleDias.length).length,
+      horas, hExtra, vExtra, vRec,
+      hOrd: suma((e) => e.horas.ORD), hNoct: suma((e) => e.horas.RN),
+      hDom: suma((e) => e.horas.RDF + e.horas.RNDF), hExtDiur: suma((e) => e.horas.HED), hExtNoct: suma((e) => e.horas.HEN),
+      hExtDom: suma((e) => e.horas.HEDDF + e.horas.HENDF),
+      neto: L.totales.neto, devengado: L.totales.devengado, aportes: L.totales.aportes, provisiones: L.totales.provisiones, costo: L.totales.costo,
+      costoHora: horas ? L.totales.costo / horas : 0,
+      asistencia: esperados ? asistidos / esperados : 0,
+      porRevisar: suma((e) => e.inconsistencias.length),
+      diasSobreTope, sobreDia: [...sobreDia], sobreSemana: [...sobreSemana],
+    };
+  }
+
+  // Variación frente al periodo anterior, con flecha y texto (nunca solo color)
+  function delta(actual, anterior, menosEsMejor) {
+    if (!anterior || !isFinite(anterior)) return '<small class="tenue">sin periodo anterior para comparar</small>';
+    const v = (actual - anterior) / anterior;
+    if (Math.abs(v) < 0.005) return '<small class="tenue">igual que el periodo anterior</small>';
+    const bien = menosEsMejor ? v < 0 : v > 0;
+    return `<small class="delta ${bien ? 'delta-bien' : 'delta-mal'}">${v > 0 ? '▲' : '▼'} ${Math.abs(Math.round(v * 100))} % frente al periodo anterior</small>`;
+  }
+  const barras = (items, fmt) => {
+    const max = Math.max(1, ...items.map((i) => i.valor));
+    const total = items.reduce((s, i) => s + i.valor, 0) || 1;
+    return items.map((i) => `<div class="fila-barra" title="${esc(i.nombre)}: ${fmt(i.valor)} (${Math.round((i.valor / total) * 100)} %)">
+      <span class="fila-nombre">${esc(i.nombre)}</span><span class="fila-pista"><span class="fila-valor" style="width:${(i.valor / max) * 100}%"></span></span>
+      <span class="fila-num">${fmt(i.valor)} · ${Math.round((i.valor / total) * 100)} %</span></div>`).join('');
+  };
+
   let tableroPeticion = 0;
   async function pintarTablero() {
     const cont = $('#tablero');
@@ -233,71 +299,103 @@
     if (!empresa) { cont.innerHTML = $('#liq-vacio').innerHTML; return; }
     const yo = ++tableroPeticion;
     cont.innerHTML = '<p class="nota">Calculando…</p>';
-    const res = await intentar(() => obtenerLiquidacion(empresa, r));
-    if (yo !== tableroPeticion || !res) return;
-    const L = res.liquidacion;
-    const E = L.empleados;
-    const suma = (f) => E.reduce((s, e) => s + f(e), 0);
-    const extras = (e) => e.horas.HED + e.horas.HEN + e.horas.HEDDF + e.horas.HENDF;
-    const totalHoras = suma((e) => Object.values(e.horas).reduce((a, b) => a + b, 0));
-    const hExtra = suma(extras);
-    const hNoct = suma((e) => e.horas.RN + e.horas.RNDF);
-    const hDom = suma((e) => e.horas.RDF + e.horas.RNDF + e.horas.HEDDF + e.horas.HENDF);
-    const conMarcas = E.filter((e) => e.detalleDias.length).length;
-    const porRevisar = suma((e) => e.inconsistencias.length);
+    const rAnt = periodoAnterior(r);
+    const datos = await intentar(() => Promise.all([obtenerLiquidacion(empresa, r), obtenerLiquidacion(empresa, rAnt)]));
+    if (yo !== tableroPeticion || !datos) return;
+    const [res, resAnt] = datos;
+    const L = res.liquidacion, E = L.empleados;
+    const m = metricas(L, r), a = metricas(resAnt.liquidacion, rAnt);
+    // Solo se compara si el periodo anterior tiene marcaciones en al menos la mitad de sus días
+    const hayAnterior = a.diasConDatos >= a.diasCal / 2;
+    const sinComparar = a.diasConDatos ? 'el periodo anterior está incompleto' : 'sin datos del periodo anterior';
+    const d = (act, ant, menos) => (hayAnterior ? delta(act, ant, menos) : `<small class="tenue">${sinComparar}</small>`);
     const fichas = estado.empleados.filter((e) => String(e.documento).startsWith('ZK-')).length;
     const cerrado = res.periodo && res.periodo.estado === 'cerrado';
+    const extras = (e) => EXT.reduce((s, c) => s + e.horas[c], 0);
+    const vExtras = (e) => EXT.reduce((s, c) => s + e.valores[c], 0);
 
-    // Horas por día (todas las personas)
+    // Horas por día
     const porDia = {};
-    E.forEach((e) => e.detalleDias.forEach((d) => {
-      const h = Object.values(d.horas).reduce((a, b) => a + b, 0);
-      porDia[d.fecha] = porDia[d.fecha] || { h: 0, personas: 0 }; porDia[d.fecha].h += h; porDia[d.fecha].personas += 1;
+    E.forEach((e) => e.detalleDias.forEach((dd) => {
+      const h = Object.values(dd.horas).reduce((x, y) => x + y, 0);
+      porDia[dd.fecha] = porDia[dd.fecha] || { h: 0, personas: 0 }; porDia[dd.fecha].h += h; porDia[dd.fecha].personas += 1;
     }));
     const dias = [];
     for (let f = C.aFecha(r.inicio); C.isoDia(f) <= r.fin; f = C.sumarDias(f, 1)) dias.push(C.isoDia(f));
-    const maxDia = Math.max(1, ...dias.map((d) => (porDia[d] || { h: 0 }).h));
-    const barrasDia = dias.map((d) => {
-      const v = porDia[d] || { h: 0, personas: 0 }; const fest = C.esDominicalOFestivo(d);
-      return `<div class="col${fest ? ' col-fest' : ''}" title="${fechaLarga(d)}${C.nombreFestivo(d) ? ' · ' + C.nombreFestivo(d) : ''}: ${h2(v.h)} h · ${v.personas} personas">
-        <span class="col-barra" style="height:${Math.max(v.h ? 3 : 0, (v.h / maxDia) * 100)}%"></span><span class="col-dia">${+d.slice(8)}</span></div>`;
+    const maxDia = Math.max(1, ...dias.map((x) => (porDia[x] || { h: 0 }).h));
+    const barrasDia = dias.map((x) => {
+      const v = porDia[x] || { h: 0, personas: 0 }; const fest = C.esDominicalOFestivo(x);
+      return `<div class="col${fest ? ' col-fest' : ''}" title="${fechaLarga(x)}${C.nombreFestivo(x) ? ' · ' + C.nombreFestivo(x) : ''}: ${h2(v.h)} h · ${v.personas} personas">
+        <span class="col-barra" style="height:${Math.max(v.h ? 3 : 0, (v.h / maxDia) * 100)}%"></span><span class="col-dia">${+x.slice(8)}</span></div>`;
     }).join('');
 
-    // Quién hace más horas extra
-    const top = [...E].sort((a, b) => extras(b) - extras(a)).filter((e) => extras(e) > 0).slice(0, 8);
+    // Quién concentra las horas extra
+    const top = [...E].sort((x, y) => extras(y) - extras(x)).filter((e) => extras(e) > 0).slice(0, 8);
     const maxExt = Math.max(1, ...top.map(extras));
-    const barrasExt = top.map((e) => `<div class="fila-barra" title="${esc(e.nombre)}: ${h2(extras(e))} h extra · ${$f(e.valores.HED + e.valores.HEN + e.valores.HEDDF + e.valores.HENDF)}">
-        <span class="fila-nombre">${esc(e.nombre)}</span><span class="fila-pista"><span class="fila-valor" style="width:${(extras(e) / maxExt) * 100}%"></span></span><span class="fila-num">${h2(extras(e))} h</span></div>`).join('')
+    const barrasExt = top.map((e) => `<div class="fila-barra" title="${esc(e.nombre)}: ${h2(extras(e))} h extra · ${$f(vExtras(e))}">
+        <span class="fila-nombre">${esc(e.nombre)}</span><span class="fila-pista"><span class="fila-valor" style="width:${(extras(e) / maxExt) * 100}%"></span></span><span class="fila-num">${h2(extras(e))} h · ${$f(vExtras(e))}</span></div>`).join('')
       || '<p class="nota">Nadie tiene horas extra en este periodo.</p>';
+    const top3 = top.slice(0, 3).reduce((s, e) => s + extras(e), 0);
 
-    const revisar = [
-      porRevisar && `<div class="alerta"><strong>${porRevisar}</strong> marcaciones sin pareja (falta entrada o salida). <button class="btn btn-mini" data-ir="asistencia" type="button">Revisar en Asistencia</button></div>`,
-      fichas && `<div class="alerta"><strong>${fichas}</strong> empleados con ficha incompleta: falta cédula, salario o fecha de ingreso. <button class="btn btn-mini" data-ir="empleados" type="button">Completar fichas</button></div>`,
-    ].filter(Boolean).join('') || '<p class="nota">Todo en orden para este periodo.</p>';
+    const composicion = barras([
+      { nombre: 'Salarios y auxilios', valor: Math.max(0, m.devengado - m.vRec - m.vExtra) },
+      { nombre: 'Recargos nocturnos y dominicales', valor: m.vRec },
+      { nombre: 'Horas extra', valor: m.vExtra },
+      { nombre: 'Seguridad social y parafiscales', valor: m.aportes },
+      { nombre: 'Prestaciones (provisión)', valor: m.provisiones },
+    ], $f);
+    const tipos = barras([
+      { nombre: 'Ordinarias diurnas', valor: m.hOrd }, { nombre: 'Ordinarias nocturnas', valor: m.hNoct },
+      { nombre: 'Dominicales y festivas', valor: m.hDom }, { nombre: 'Extra diurnas', valor: m.hExtDiur },
+      { nombre: 'Extra nocturnas', valor: m.hExtNoct }, { nombre: 'Extra en dominical o festivo', valor: m.hExtDom },
+    ].filter((i) => i.valor > 0), (v) => h2(v) + ' h') || '<p class="nota">Sin horas registradas en este periodo.</p>';
+
+    const lista = (arr) => esc(arr.slice(0, 6).join(', ')) + (arr.length > 6 ? ` y ${arr.length - 6} más` : '');
+    const alertas = [
+      m.sobreSemana.length && `<div class="alerta alerta-critica"><strong>${m.sobreSemana.length}</strong> ${m.sobreSemana.length === 1 ? 'persona superó' : 'personas superaron'} las ${TOPE_EXTRA_SEMANA} horas extra en una semana, el máximo legal: ${lista(m.sobreSemana)}.</div>`,
+      m.diasSobreTope && `<div class="alerta"><strong>${m.diasSobreTope}</strong> jornadas con más de ${TOPE_EXTRA_DIA} horas extra en el día (${m.sobreDia.length} personas): ${lista(m.sobreDia)}.</div>`,
+      m.porRevisar && `<div class="alerta"><strong>${m.porRevisar}</strong> marcaciones sin pareja. Mientras no se corrijan, esas horas no se pagan. <button class="btn btn-mini" data-ir="asistencia" type="button">Revisar en Asistencia</button></div>`,
+      fichas && `<div class="alerta"><strong>${fichas}</strong> empleados con ficha incompleta: las cifras en pesos usan el salario mínimo provisional. <button class="btn btn-mini" data-ir="empleados" type="button">Completar fichas</button></div>`,
+    ].filter(Boolean).join('') || '<p class="nota">Sin alertas en este periodo.</p>';
 
     cont.innerHTML = `
-      <div class="tablero-cabecera"><div><span class="eyebrow">${esc(empresa.nombre)}</span>
+      <div class="tablero-cabecera"><div><span class="eyebrow">${esc(empresa.nombre)} · Tablero gerencial</span>
         <h2>${fechaLarga(r.inicio)} a ${fechaLarga(r.fin)}</h2></div>
         ${cerrado ? '<span class="chip chip-ok">Periodo cerrado</span>' : '<span class="chip">Periodo en curso · cifras estimadas</span>'}</div>
       <div class="resumen">
-        <div class="cifra destacada"><span class="eyebrow">Neto a pagar</span><b>${$f(L.totales.neto)}</b><small>${E.length} empleados</small></div>
-        <div class="cifra"><span class="eyebrow">Costo total empresa</span><b>${$f(L.totales.costo)}</b><small>con aportes y provisiones</small></div>
-        <div class="cifra"><span class="eyebrow">Horas trabajadas</span><b>${h2(totalHoras)}</b><small>${conMarcas} personas marcaron</small></div>
-        <div class="cifra"><span class="eyebrow">Horas extra</span><b>${h2(hExtra)}</b><small>${totalHoras ? Math.round((hExtra / totalHoras) * 100) : 0} % del total</small></div>
-        <div class="cifra"><span class="eyebrow">Horas nocturnas</span><b>${h2(hNoct)}</b><small>desde las 7 p. m.</small></div>
-        <div class="cifra"><span class="eyebrow">Dominicales y festivos</span><b>${h2(hDom)}</b><small>horas con recargo</small></div>
+        <div class="cifra destacada"><span class="eyebrow">Costo laboral total</span><b>${$f(m.costo)}</b>${d(m.costo, a.costo, true)}</div>
+        <div class="cifra"><span class="eyebrow">Neto a pagar</span><b>${$f(m.neto)}</b><small>${m.personas} empleados</small></div>
+        <div class="cifra"><span class="eyebrow">Costo por hora trabajada</span><b>${$f(m.costoHora)}</b>${d(m.costoHora, a.costoHora, true)}</div>
+        <div class="cifra"><span class="eyebrow">Horas extra</span><b>${h2(m.hExtra)} h</b>${d(m.hExtra, a.hExtra, true)}</div>
+        <div class="cifra"><span class="eyebrow">Costo de extras y recargos</span><b>${$f(m.vExtra + m.vRec)}</b><small>${m.devengado ? Math.round(((m.vExtra + m.vRec) / m.devengado) * 100) : 0} % de lo devengado</small></div>
+        <div class="cifra"><span class="eyebrow">Asistencia estimada</span><b>${Math.round(m.asistencia * 100)} %</b><small>${m.conMarcas} de ${m.personas} personas marcaron</small></div>
       </div>
       <div class="tablero-grid">
+        <div class="panel"><h3>En qué se va el costo laboral</h3><p class="nota">Lo que le cuesta el periodo a la empresa, incluido lo que no se le paga directo al trabajador.</p>${composicion}</div>
+        <div class="panel"><h3>Horas trabajadas por tipo</h3><p class="nota">${h2(m.horas)} horas en total. Las extra son el ${m.horas ? Math.round((m.hExtra / m.horas) * 100) : 0} %.</p>${tipos}</div>
         <div class="panel"><h3>Horas trabajadas por día</h3><p class="nota">Todas las personas. Domingos y festivos resaltados.</p>
           <div class="columnas" role="img" aria-label="Horas trabajadas por día">${barrasDia}</div></div>
-        <div class="panel"><h3>Quién hace más horas extra</h3>${barrasExt}</div>
-      </div>
-      <div class="panel"><h3>Para revisar</h3><div class="alertas">${revisar}</div></div>`;
+        <div class="panel"><h3>Quién concentra las horas extra</h3>${top.length ? `<p class="nota">Las 3 primeras personas hacen el ${Math.round((top3 / (m.hExtra || 1)) * 100)} % de las horas extra.</p>` : ''}${barrasExt}</div>
+        <div class="panel"><h3>Costo laboral de los últimos periodos</h3><p class="nota">Costo total de la empresa por periodo.</p>
+          <div id="tendencia" class="columnas columnas-anchas" role="img" aria-label="Costo laboral por periodo"><p class="nota">Calculando…</p></div></div>
+        <div class="panel"><h3>Alertas para gerencia</h3><div class="alertas">${alertas}</div></div>
+      </div>`;
     cont.querySelectorAll('[data-ir]').forEach((b) => b.addEventListener('click', () => {
       if (b.dataset.ir === 'asistencia') { $('#asis-desde').value = r.inicio; $('#asis-hasta').value = r.fin; }
       mostrarVista(b.dataset.ir);
     }));
+
+    // Tendencia: los 6 últimos periodos (se calcula después para no demorar el tablero)
+    const periodos = [r, rAnt]; while (periodos.length < 6) periodos.push(periodoAnterior(periodos[periodos.length - 1]));
+    const previos = await intentar(() => Promise.all(periodos.slice(2).map((p) => obtenerLiquidacion(empresa, p))));
+    if (yo !== tableroPeticion || !previos) return;
+    const serie = [L, resAnt.liquidacion, ...previos.map((x) => x.liquidacion)].map((liq, i) => ({ r: periodos[i], costo: liq.empleados.some((e) => e.detalleDias.length) ? liq.totales.costo : 0 })).reverse();
+    const maxC = Math.max(1, ...serie.map((x) => x.costo));
+    $('#tendencia').innerHTML = serie.map((x, i) => `<div class="col${i === serie.length - 1 ? ' col-actual' : ''}" title="${etiquetaPeriodo(x.r)}: ${x.costo ? $f(x.costo) : 'sin marcaciones'}">
+      <span class="col-valor">${x.costo ? '$' + (x.costo / 1e6).toLocaleString('es-CO', { maximumFractionDigits: 1 }) + ' M' : '—'}</span>
+      <span class="col-barra" style="height:${x.costo ? Math.max(3, (x.costo / maxC) * 82) : 0}%"></span><span class="col-dia">${etiquetaPeriodo(x.r)}</span></div>`).join('');
   }
+
   $('#btn-calcular').addEventListener('click', calcular);
 
   function pintarLiquidacion() {
@@ -684,24 +782,26 @@
   }
   // Usuarios de la empresa cliente que pueden entrar por su enlace
   async function verAccesos(emp) {
-    const usuarios = (await intentar(() => db.rpc('usuarios_de_empresa', { p_empresa: emp.id }))) || [];
+    const conAcceso = (await intentar(() => db.rpc('usuarios_de_empresa', { p_empresa: emp.id }))) || [];
+    const todos = esAdmin() ? ((await intentar(() => db.rpc('usuarios_jornal', {}))) || []) : [];
+    const disponibles = todos.filter((u) => u.rol === 'cliente' && !conAcceso.some((c) => c.usuario_id === u.usuario_id));
     abrirDialogo({
       titulo: `Accesos · ${emp.nombre}`,
       campos: [
-        { tipo: 'texto', html: `<div class="ancho lista-accesos">${usuarios.length
-          ? usuarios.map((u) => `<div><span>${esc(u.email)}</span>${esAdmin() ? `<button class="btn btn-fantasma btn-mini" type="button" data-quitar="${u.usuario_id}">Quitar</button>` : ''}</div>`).join('')
-          : '<p class="nota">Nadie de esta empresa tiene acceso todavía.</p>'}</div>` },
+        { tipo: 'texto', html: `<div class="ancho lista-accesos">${conAcceso.length
+          ? conAcceso.map((u) => `<div><span class="mono">${esc(U.mostrar(u.email))}</span>${esAdmin() ? `<button class="btn btn-fantasma btn-mini" type="button" data-quitar="${u.usuario_id}">Quitar</button>` : ''}</div>`).join('')
+          : '<p class="nota">Ningún usuario de esta empresa tiene acceso todavía.</p>'}</div>` },
         ...(esAdmin() ? [
-          { tipo: 'texto', html: '<p class="ancho nota">Escribe el correo de la persona de la empresa. Le llega una invitación para crear su contraseña y solo verá esta empresa.</p>' },
-          { nombre: 'email', etiqueta: 'Correo', tipo: 'email', ancho: true },
-          { nombre: 'nombre', etiqueta: 'Nombre (opcional)', ancho: true },
+          disponibles.length
+            ? { nombre: 'usuario', etiqueta: 'Dar acceso a', tipo: 'select', ancho: true, opciones: disponibles.map((u) => [u.usuario_id, U.mostrar(u.usuario) + (u.nombre && u.nombre !== u.usuario ? ` · ${u.nombre}` : '')]) }
+            : { tipo: 'texto', html: '<p class="ancho nota">No hay usuarios de empresa libres. Créalos en la pestaña Usuarios.</p>' },
         ] : []),
       ],
-      textoGuardar: esAdmin() ? 'Invitar' : 'Cerrar',
+      textoGuardar: esAdmin() && disponibles.length ? 'Dar acceso' : 'Cerrar',
       alGuardar: async (d) => {
-        if (!esAdmin() || !d.email) return;
-        const r = await db.invitar({ email: d.email, nombre: d.nombre || undefined, empresa_id: emp.id, rol: 'cliente' });
-        aviso(r.estado === 'existente' ? 'Ese correo ya tenía cuenta: quedó con acceso a la empresa' : 'Invitación enviada a ' + r.email);
+        if (!esAdmin() || !d.usuario) return;
+        await db.rpc('asignar_empresa_usuario', { p_usuario: d.usuario, p_empresa: emp.id });
+        aviso('Acceso agregado');
       },
     });
     $$('#dialogo [data-quitar]').forEach((b) => b.addEventListener('click', async () => {
@@ -709,28 +809,31 @@
       $('#dialogo').close(); aviso('Acceso retirado'); verAccesos(emp);
     }));
   }
+
   $('#btn-nueva-empresa').addEventListener('click', () => editarEmpresa(null));
 
   // ------------------------------------------------------------------
   // Usuarios (solo administrador)
   // ------------------------------------------------------------------
   const ROLES_TXT = { admin: 'Administrador', tecnico: 'Técnico', cliente: 'Usuario de empresa' };
+  const U = window.JornalUsuario;
   async function pintarUsuarios() {
     if (!esAdmin()) return;
-    $('#inv-empresa').innerHTML = '<option value="">— Ninguna (solo para técnicos y admin) —</option>' + estado.empresas.map((e) => `<option value="${e.id}">${esc(e.nombre)}</option>`).join('');
-    if (estado.empresaId) $('#inv-empresa').value = estado.empresaId;
+    $('#nu-empresa').innerHTML = '<option value="">— Ninguna —</option>' + estado.empresas.map((e) => `<option value="${e.id}">${esc(e.nombre)}</option>`).join('');
+    if (estado.empresaId) $('#nu-empresa').value = estado.empresaId;
     const t = $('#tabla-usuarios');
-    const lista = (await intentar(() => db.rpc('listar_usuarios', {}))) || [];
+    const lista = (await intentar(() => db.rpc('usuarios_jornal', {}))) || [];
     t.innerHTML = `<thead><tr><th>Usuario</th><th>Rol</th><th>Empresas</th><th>Estado</th><th></th></tr></thead><tbody>${
-      lista.map((u) => `<tr data-id="${u.usuario_id}">
-        <td>${esc(u.email)}<span class="sub">${esc(u.nombre && u.nombre !== u.email ? u.nombre : '')}</span></td>
-        <td><select class="sel-rol" data-id="${u.usuario_id}" aria-label="Rol de ${esc(u.email)}">${Object.entries(ROLES_TXT).map(([k, v]) => `<option value="${k}" ${k === u.rol ? 'selected' : ''}>${v}</option>`).join('')}</select></td>
+      lista.map((u) => `<tr>
+        <td><strong class="mono">${esc(U.mostrar(u.usuario))}</strong><span class="sub">${esc(u.nombre && u.nombre !== u.usuario ? u.nombre : '')}</span></td>
+        <td><select class="sel-rol" data-id="${u.usuario_id}" aria-label="Rol de ${esc(u.usuario)}" ${u.usuario_id === estado.perfil.id ? 'disabled' : ''}>${Object.entries(ROLES_TXT).map(([k, v]) => `<option value="${k}" ${k === u.rol ? 'selected' : ''}>${v}</option>`).join('')}</select></td>
         <td>${u.rol === 'cliente'
           ? ((u.empresas || []).map((e) => `<span class="chip">${esc(e.nombre)} <button class="quitar-chip" type="button" data-quitar="${e.id}" data-usuario="${u.usuario_id}" aria-label="Quitar ${esc(e.nombre)}">×</button></span>`).join(' ') || '<span class="tenue">Sin empresa: no ve nada</span>')
           : '<span class="tenue">Todas</span>'}</td>
-        <td>${u.ultimo_ingreso ? `<span class="chip chip-ok">Activo</span><span class="sub">último ingreso ${new Date(u.ultimo_ingreso).toLocaleDateString('es-CO')}</span>` : u.confirmado ? '<span class="chip chip-ok">Confirmado</span>' : '<span class="chip chip-aviso">Invitación enviada</span>'}</td>
+        <td>${u.debe_cambiar ? '<span class="chip chip-aviso">Contraseña temporal</span>' : '<span class="chip chip-ok">Activo</span>'}${u.ultimo_ingreso ? `<span class="sub">último ingreso ${new Date(u.ultimo_ingreso).toLocaleDateString('es-CO')}</span>` : '<span class="sub">no ha entrado</span>'}</td>
         <td class="acciones-fila">${u.rol === 'cliente' ? `<button class="btn btn-mini" type="button" data-asignar="${u.usuario_id}">Asignar empresa</button>` : ''}
-          ${!u.ultimo_ingreso ? `<button class="btn btn-mini" type="button" data-reenviar="${esc(u.email)}">Reenviar invitación</button>` : ''}</td></tr>`).join('')
+          <button class="btn btn-mini" type="button" data-clave="${u.usuario_id}" data-nombre="${esc(U.mostrar(u.usuario))}">Restablecer contraseña</button>
+          ${u.usuario_id !== estado.perfil.id ? `<button class="btn btn-mini btn-peligro" type="button" data-eliminar="${u.usuario_id}" data-nombre="${esc(U.mostrar(u.usuario))}">Eliminar</button>` : ''}</td></tr>`).join('')
       || '<tr><td colspan="5" class="tenue">Todavía no hay usuarios.</td></tr>'}</tbody>`;
     t.querySelectorAll('.sel-rol').forEach((sel) => sel.addEventListener('change', async () => {
       const ok = await intentar(() => db.rpc('cambiar_rol_usuario', { p_usuario: sel.dataset.id, p_rol: sel.value }));
@@ -746,24 +849,36 @@
       textoGuardar: 'Asignar',
       alGuardar: async (d) => { await db.rpc('asignar_empresa_usuario', { p_usuario: b.dataset.asignar, p_empresa: d.empresa }); aviso('Empresa asignada'); pintarUsuarios(); },
     })));
-    t.querySelectorAll('[data-reenviar]').forEach((b) => b.addEventListener('click', async () => {
-      const ok = await intentar(() => db.recuperarClave(b.dataset.reenviar, location.origin + location.pathname));
-      if (ok !== undefined) aviso('Se envió de nuevo el correo para crear contraseña');
-    }));
+    t.querySelectorAll('[data-clave]').forEach((b) => b.addEventListener('click', () => abrirDialogo({
+      titulo: `Restablecer contraseña · ${b.dataset.nombre}`,
+      campos: [
+        { tipo: 'texto', html: '<p class="ancho nota">Pon una contraseña temporal y dásela a la persona. Al entrar, Jornal le pedirá cambiarla.</p>' },
+        { nombre: 'clave', etiqueta: 'Contraseña temporal (mínimo 8 caracteres)', requerido: true, ancho: true },
+      ],
+      textoGuardar: 'Restablecer',
+      alGuardar: async (d) => { await db.gestionarUsuarios({ accion: 'clave', usuario_id: b.dataset.clave, clave: d.clave }); aviso('Contraseña temporal asignada'); pintarUsuarios(); },
+    })));
+    t.querySelectorAll('[data-eliminar]').forEach((b) => b.addEventListener('click', () => abrirDialogo({
+      titulo: `Eliminar usuario · ${b.dataset.nombre}`,
+      campos: [{ tipo: 'texto', html: `<p class="ancho">El usuario <strong>${esc(b.dataset.nombre)}</strong> ya no podrá entrar a Jornal. Los datos de las empresas no se borran.</p>` }],
+      textoGuardar: 'Eliminar usuario',
+      alGuardar: async () => { await db.gestionarUsuarios({ accion: 'eliminar', usuario_id: b.dataset.eliminar }); aviso('Usuario eliminado'); pintarUsuarios(); },
+    })));
   }
-  $('#form-invitar').addEventListener('submit', (ev) => {
+  $('#form-usuario').addEventListener('submit', (ev) => {
     ev.preventDefault();
     intentar(async () => {
-      const btn = $('#btn-invitar'); btn.disabled = true; btn.textContent = 'Enviando…';
+      const btn = $('#btn-crear-usuario'); btn.disabled = true; btn.textContent = 'Creando…';
       try {
-        const rol = $('#inv-rol').value;
-        const empresa_id = $('#inv-empresa').value || null;
+        const rol = $('#nu-rol').value, empresa_id = $('#nu-empresa').value || null;
         if (rol === 'cliente' && !empresa_id) { aviso('Elige la empresa a la que pertenece este usuario.'); return; }
-        const r = await db.invitar({ email: $('#inv-email').value.trim(), nombre: $('#inv-nombre').value.trim() || undefined, empresa_id, rol });
-        aviso(r.estado === 'existente' ? 'Ese correo ya tenía cuenta: quedó asignado' : 'Invitación enviada a ' + r.email);
-        $('#inv-email').value = ''; $('#inv-nombre').value = '';
+        const clave = $('#nu-clave').value;
+        if (clave.length < 8) { aviso('La contraseña temporal debe tener al menos 8 caracteres.'); return; }
+        const r = await db.gestionarUsuarios({ accion: 'crear', usuario: $('#nu-usuario').value.trim(), nombre: $('#nu-nombre').value.trim() || undefined, clave, rol, empresa_id });
+        aviso(`Usuario "${r.usuario}" creado. Entra con ese usuario y la contraseña temporal.`);
+        ['#nu-usuario', '#nu-nombre', '#nu-clave'].forEach((id) => { $(id).value = ''; });
         pintarUsuarios();
-      } finally { btn.disabled = false; btn.textContent = 'Invitar'; }
+      } finally { btn.disabled = false; btn.textContent = 'Crear usuario'; }
     });
   });
 

@@ -27,8 +27,7 @@ returns trigger language plpgsql security definer set search_path = public as $$
 begin
   insert into public.usuarios_perfil (id, nombre, rol)
   values (new.id, coalesce(new.raw_user_meta_data->>'nombre', new.email),
-          -- dueño de Soporte TI: entra como administrador desde el primer momento
-          case when lower(new.email) = 'santiagoagudelofutbol@gmail.com' then 'admin' else 'cliente' end)
+          'cliente')
   on conflict (id) do nothing;
   return new;
 end $$;
@@ -406,3 +405,27 @@ revoke execute on function public.asignar_empresa_usuario(uuid, uuid) from publi
 grant execute on function public.listar_usuarios() to authenticated;
 grant execute on function public.cambiar_rol_usuario(uuid, text) to authenticated;
 grant execute on function public.asignar_empresa_usuario(uuid, uuid) to authenticated;
+
+-- Usuarios creados por el administrador (sin correo): la pestaña Usuarios usa esta función.
+-- La creación, el restablecimiento de contraseñas y la eliminación los hace la
+-- Edge Function supabase/functions/gestionar-usuarios.
+create or replace function public.usuarios_jornal()
+returns table (usuario_id uuid, usuario text, email text, nombre text, rol text, ultimo_ingreso timestamptz, debe_cambiar boolean, empresas jsonb)
+language sql stable security definer set search_path = public, auth as $$
+  select u.id,
+         coalesce(u.raw_user_meta_data->>'usuario', u.email::text),
+         u.email::text, coalesce(u.raw_user_meta_data->>'nombre', p.nombre), coalesce(p.rol, 'cliente'), u.last_sign_in_at,
+         coalesce((u.raw_user_meta_data->>'debe_cambiar_clave')::boolean, false),
+         coalesce((select jsonb_agg(jsonb_build_object('id', e.id, 'nombre', e.nombre) order by e.nombre)
+                   from public.usuarios_empresas ue join public.empresas e on e.id = ue.empresa_id
+                   where ue.usuario_id = u.id), '[]'::jsonb)
+  from auth.users u left join public.usuarios_perfil p on p.id = u.id
+  where public.es_admin()
+  order by 2;
+$$;
+revoke execute on function public.usuarios_jornal() from public, anon;
+grant execute on function public.usuarios_jornal() to authenticated;
+
+-- Integración futura con el biométrico: foto y datos de huella/rostro/tarjeta del empleado
+alter table public.empleados add column if not exists foto_url text;
+alter table public.empleados add column if not exists datos_biometrico jsonb;

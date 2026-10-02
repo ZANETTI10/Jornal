@@ -177,6 +177,21 @@ select:disabled { opacity: 1; background: transparent; border-color: transparent
 .fila-valor { display: block; height: 100%; background: var(--sello); border-radius: 4px; }
 .fila-num { font-family: var(--f-cifras); font-variant-numeric: tabular-nums; color: var(--tinta-suave); }
 
+/* Tablero gerencial */
+.delta { font-weight: 600; }
+.delta-bien { color: var(--sello); }
+.delta-mal { color: var(--critico); }
+.cifra small.tenue { color: var(--tinta-suave); }
+.fila-barra { grid-template-columns: minmax(0, 12rem) minmax(40px, 1fr) auto; }
+.columnas-anchas { gap: 10px; overflow: visible; }
+.columnas-anchas .col { flex: 1 1 0; }
+.columnas-anchas .col-barra { max-width: 56px; opacity: 0.45; }
+.columnas-anchas .col-actual .col-barra { opacity: 1; }
+.col-valor { font-family: var(--f-cifras); font-size: 0.72rem; color: var(--tinta-suave); white-space: nowrap; }
+.col-actual .col-valor { color: var(--tinta); font-weight: 600; }
+.columnas-anchas .col-dia { font-size: 0.72rem; white-space: nowrap; }
+.alerta-critica { background: var(--critico-suave); color: var(--critico); }
+
 /* Usuarios */
 .form-invitar { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
 .form-invitar .campo { flex: 1 1 200px; }

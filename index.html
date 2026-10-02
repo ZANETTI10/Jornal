@@ -15,22 +15,21 @@
   <form id="form-login" class="login-caja">
     <div class="marca"><span class="marca-sello">J</span><div><strong>Jornal</strong><small>Nómina y asistencia · Soporte TI</small></div></div>
     <p id="login-empresa" class="login-empresa" hidden></p>
-    <label for="login-email">Correo</label>
-    <input id="login-email" type="email" autocomplete="username" required>
+    <label for="login-email">Usuario</label>
+    <input id="login-email" type="text" autocomplete="username" autocapitalize="none" spellcheck="false" required>
     <label for="login-clave">Contraseña</label>
     <input id="login-clave" type="password" autocomplete="current-password" required>
     <p id="login-error" class="error" hidden></p>
     <button class="btn btn-primario" type="submit">Entrar</button>
-    <button id="btn-olvide" class="btn btn-fantasma" type="button">Olvidé mi contraseña</button>
-    <p id="login-nota" class="nota">Si tu empresa usa Jornal, Soporte TI te envía una invitación a tu correo.</p>
+    <p id="login-nota" class="nota">¿Olvidaste tu contraseña o no tienes usuario? Pídeselo a Soporte TI.</p>
   </form>
 </div>
 
 <div id="pantalla-clave" class="login" hidden>
   <form id="form-clave" class="login-caja">
     <div class="marca"><span class="marca-sello">J</span><div><strong>Jornal</strong><small>Nómina y asistencia · Soporte TI</small></div></div>
-    <h2 id="clave-titulo">Crea tu contraseña</h2>
-    <p class="nota">Mínimo 8 caracteres. La usarás junto con tu correo para entrar a Jornal.</p>
+    <h2 id="clave-titulo">Cambia tu contraseña</h2>
+    <p class="nota">Estás usando una contraseña temporal. Crea una nueva de mínimo 8 caracteres; solo tú la vas a conocer.</p>
     <label for="clave-nueva">Contraseña nueva</label>
     <input id="clave-nueva" type="password" autocomplete="new-password" minlength="8" required>
     <label for="clave-repite">Repite la contraseña</label>
@@ -152,15 +151,16 @@
     <!-- USUARIOS (solo administrador) -->
     <section id="vista-usuarios" class="vista" hidden>
       <div class="panel">
-        <h2>Invitar usuario</h2>
-        <p class="nota">Le llega un correo para crear su contraseña. Un usuario de empresa solo ve la empresa que le asignes; tú y los técnicos ven todas.</p>
-        <form id="form-invitar" class="form-invitar">
-          <div class="campo"><label for="inv-email">Correo</label><input id="inv-email" type="email" required placeholder="nomina@empresa.com"></div>
-          <div class="campo"><label for="inv-nombre">Nombre</label><input id="inv-nombre" type="text" placeholder="Adriana Velásquez"></div>
-          <div class="campo"><label for="inv-empresa">Empresa</label><select id="inv-empresa"></select></div>
-          <div class="campo"><label for="inv-rol">Rol</label><select id="inv-rol">
+        <h2>Crear usuario</h2>
+        <p class="nota">Tú defines el usuario y una contraseña temporal; al entrar por primera vez, Jornal le pide cambiarla. Un usuario de empresa solo ve las empresas que le asignes; administradores y técnicos ven todas.</p>
+        <form id="form-usuario" class="form-invitar">
+          <div class="campo"><label for="nu-usuario">Usuario</label><input id="nu-usuario" type="text" required placeholder="Temporal 1" autocomplete="off"></div>
+          <div class="campo"><label for="nu-nombre">Nombre</label><input id="nu-nombre" type="text" placeholder="Nómina La Rufina" autocomplete="off"></div>
+          <div class="campo"><label for="nu-clave">Contraseña temporal</label><input id="nu-clave" type="text" required minlength="8" autocomplete="off"></div>
+          <div class="campo"><label for="nu-rol">Rol</label><select id="nu-rol">
             <option value="cliente">Usuario de empresa</option><option value="tecnico">Técnico Soporte TI</option><option value="admin">Administrador</option></select></div>
-          <button class="btn btn-primario" type="submit" id="btn-invitar">Invitar</button>
+          <div class="campo"><label for="nu-empresa">Empresa</label><select id="nu-empresa"></select></div>
+          <button class="btn btn-primario" type="submit" id="btn-crear-usuario">Crear usuario</button>
         </form>
       </div>
       <div class="tabla-envoltura"><table id="tabla-usuarios" class="tabla"></table></div>

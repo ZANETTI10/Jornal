@@ -9,6 +9,11 @@
   // Si la persona llega desde el correo de invitación o de recuperación, el enlace
   // trae "type=invite" o "type=recovery"; se lee antes de que Supabase limpie la URL.
   const TIPO_ENLACE = (/[#&?]type=(invite|recovery)/.exec(location.hash + location.search) || [])[1] || null;
+  // Los usuarios sin correo (p. ej. "Temporal 1") se guardan como temporal.1@jornal.local
+  const normalizarUsuario = (u) => String(u || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '.').replace(/^\.+|\.+$/g, '');
+  const aCorreo = (u) => (String(u).includes('@') ? String(u).trim().toLowerCase() : `${normalizarUsuario(u)}@jornal.local`);
+  window.JornalUsuario = { normalizar: normalizarUsuario, aCorreo, mostrar: (email) => String(email || '').replace(/@jornal\.local$/, '') };
   const MODO_DEMO = !cfg.SUPABASE_URL || !cfg.SUPABASE_ANON_KEY || !window.supabase;
 
   // ------------------------------------------------------------------
@@ -27,12 +32,14 @@
     return {
       demo: false,
       async sesion() { const { data } = await sb.auth.getSession(); return data.session; },
-      async entrar(email, clave) { const { error } = await sb.auth.signInWithPassword({ email, password: clave }); fallo(error); },
+      async entrar(usuario, clave) { const { error } = await sb.auth.signInWithPassword({ email: aCorreo(usuario), password: clave }); fallo(error); },
       async salir() { await sb.auth.signOut(); },
       async perfil() {
         const s = await this.sesion(); if (!s) return null;
         const { data } = await sb.from('usuarios_perfil').select('*').eq('id', s.user.id).maybeSingle();
-        return { id: s.user.id, email: s.user.email, nombre: data?.nombre || s.user.email, rol: data?.rol || 'cliente' };
+        const md = s.user.user_metadata || {};
+        return { id: s.user.id, email: s.user.email, usuario: md.usuario || s.user.email, nombre: md.nombre || data?.nombre || s.user.email,
+                 rol: data?.rol || 'cliente', debeCambiar: md.debe_cambiar_clave === true };
       },
       async listar(tabla, f) {
         // pagina de a 1000 filas (límite por defecto de Supabase)
@@ -52,7 +59,18 @@
       },
       async rpc(nombre, args) { const { data, error } = await sb.rpc(nombre, args); fallo(error); return data; },
       tipoEnlace: TIPO_ENLACE,
-      async cambiarClave(clave) { const { error } = await sb.auth.updateUser({ password: clave }); fallo(error); },
+      async cambiarClave(clave) { const { error } = await sb.auth.updateUser({ password: clave, data: { debe_cambiar_clave: false } }); fallo(error); },
+      async gestionarUsuarios(datos) {
+        const s = await this.sesion();
+        const r = await fetch(`${cfg.SUPABASE_URL}/functions/v1/gestionar-usuarios`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', apikey: cfg.SUPABASE_ANON_KEY, Authorization: `Bearer ${s ? s.access_token : cfg.SUPABASE_ANON_KEY}` },
+          body: JSON.stringify(datos),
+        });
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(j.error || 'No se pudo completar');
+        return j;
+      },
       async recuperarClave(email, volverA) { const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: volverA }); fallo(error); },
       async invitar(datos) {
         const s = await this.sesion();
@@ -97,12 +115,23 @@
       async entrar() {}, async salir() {},
       tipoEnlace: null,
       async cambiarClave() {}, async recuperarClave() {},
+      async gestionarUsuarios(d) {
+        t.accesos = t.accesos || [];
+        if (d.accion === 'crear') { const id = 'u' + (++seq); t.accesos.push({ usuario_id: id, email: aCorreo(d.usuario), usuario: normalizarUsuario(d.usuario), nombre: d.nombre, rol: d.rol, empresa_id: d.empresa_id, debe_cambiar: true }); return { ok: true, usuario_id: id, usuario: normalizarUsuario(d.usuario) }; }
+        if (d.accion === 'eliminar') { t.accesos = t.accesos.filter((a) => a.usuario_id !== d.usuario_id); return { ok: true }; }
+        return { ok: true };
+      },
       async invitar(d) { (t.accesos = t.accesos || []).push({ usuario_id: 'u' + (++seq), email: d.email, nombre: d.nombre, rol: d.rol || 'cliente', empresa_id: d.empresa_id }); return { ok: true, estado: 'invitado', email: d.email }; },
       async perfil() { return { id: 'demo-user', email: 'demo@soporteti.co', nombre: 'Modo demo', rol: 'admin' }; },
       async rpc(nombre, args) {
         if (nombre === 'empresa_por_slug') return t.empresas.filter((e) => e.slug === String(args.p_slug).toLowerCase()).map((e) => ({ id: e.id, nombre: e.nombre }));
         if (nombre === 'usuarios_de_empresa') return (t.accesos || []).filter((a) => a.empresa_id === args.p_empresa);
         if (nombre === 'asignar_usuario_empresa') { (t.accesos = t.accesos || []).push({ usuario_id: 'u' + (++seq), email: args.p_email, rol: 'cliente', empresa_id: args.p_empresa }); return 'ok'; }
+        if (nombre === 'usuarios_jornal') {
+          const por = {};
+          (t.accesos || []).forEach((a) => { const u = (por[a.usuario_id] = por[a.usuario_id] || { usuario_id: a.usuario_id, usuario: a.usuario || a.email, email: a.email, nombre: a.nombre || '', rol: a.rol, debe_cambiar: a.debe_cambiar !== false, empresas: [] }); const e = t.empresas.find((x) => x.id === a.empresa_id); if (e) u.empresas.push({ id: e.id, nombre: e.nombre }); });
+          return Object.values(por);
+        }
         if (nombre === 'listar_usuarios') return (t.accesos || []).map((a) => ({ usuario_id: a.usuario_id, email: a.email, nombre: a.nombre || '', rol: a.rol, confirmado: false, empresas: t.empresas.filter((e) => e.id === a.empresa_id).map((e) => ({ id: e.id, nombre: e.nombre })) }));
         if (nombre === 'cambiar_rol_usuario') { (t.accesos || []).filter((a) => a.usuario_id === args.p_usuario).forEach((a) => { a.rol = args.p_rol; }); return 'ok'; }
         if (nombre === 'asignar_empresa_usuario') { const a = (t.accesos || []).find((x) => x.usuario_id === args.p_usuario); if (a) t.accesos.push({ ...a, empresa_id: args.p_empresa }); return 'ok'; }
