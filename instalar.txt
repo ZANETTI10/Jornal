@@ -1,0 +1,87 @@
+# Jornal - instalador del agente del reloj en un solo comando (PowerShell)
+# Uso:  irm https://zanetti10.github.io/Jornal/instalar.txt | iex
+# Descarga el agente, instala Python si falta, pide la llave del reloj, prueba y deja todo andando.
+& {
+  $ErrorActionPreference = 'Stop'
+  [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  $base = 'https://zanetti10.github.io/Jornal'
+  $raiz = Join-Path $env:USERPROFILE 'Jornal'
+  $dir  = Join-Path $raiz 'jornal-agente'
+  function Paso($t) { Write-Host ''; Write-Host "==> $t" -ForegroundColor Cyan }
+  function Falla($t) { Write-Host ''; Write-Host "  $t" -ForegroundColor Red; Write-Host ''; throw 'Instalacion detenida' }
+
+  Write-Host ''
+  Write-Host '  ===== Jornal: agente del reloj biometrico =====' -ForegroundColor Cyan
+
+  Paso 'Descargando el agente'
+  New-Item -ItemType Directory -Force $raiz | Out-Null
+  $zip = Join-Path $raiz 'agente.zip'
+  Invoke-WebRequest "$base/jornal-agente.zip" -OutFile $zip -UseBasicParsing
+  Expand-Archive $zip $raiz -Force
+  Remove-Item $zip -Force
+  Write-Host "  Carpeta: $dir"
+
+  Paso 'Buscando Python'
+  function BuscarPython {
+    $candidatos = @()
+    $cmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($cmd -and $cmd.Source -notlike '*WindowsApps*') { $candidatos += $cmd.Source }
+    $candidatos += Get-ChildItem "$env:LOCALAPPDATA\Programs\Python\Python3*\python.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | ForEach-Object FullName
+    $candidatos += Get-ChildItem "$env:ProgramFiles\Python3*\python.exe" -ErrorAction SilentlyContinue | Sort-Object FullName -Descending | ForEach-Object FullName
+    foreach ($c in $candidatos) {
+      try { & $c -c "import sys; assert sys.version_info >= (3, 8)" 2>$null; if ($LASTEXITCODE -eq 0) { return $c } } catch {}
+    }
+    return $null
+  }
+  $py = BuscarPython
+  if (-not $py) {
+    Write-Host '  No hay Python. Lo instalo (tarda 1 o 2 minutos)...'
+    $inst = Join-Path $env:TEMP 'python-3.12.7-amd64.exe'
+    Invoke-WebRequest 'https://www.python.org/ftp/python/3.12.7/python-3.12.7-amd64.exe' -OutFile $inst -UseBasicParsing
+    Start-Process $inst -ArgumentList '/quiet', 'InstallAllUsers=0', 'PrependPath=1', 'Include_launcher=0', 'Include_test=0' -Wait
+    Remove-Item $inst -Force -ErrorAction SilentlyContinue
+    $py = BuscarPython
+    if (-not $py) { Falla 'No se pudo instalar Python. Instalalo desde python.org y vuelve a ejecutar el comando.' }
+  }
+  Write-Host "  Python: $py"
+
+  Paso 'Instalando el componente para hablar con el reloj (pyzk)'
+  & $py -m pip install --upgrade --disable-pip-version-check --quiet pyzk
+  if ($LASTEXITCODE -ne 0) { Falla 'No se pudo instalar pyzk. Revisa la conexion a internet y repite el comando.' }
+
+  Paso 'Datos del reloj'
+  $cfgRuta = Join-Path $dir 'config.ini'
+  function Pregunta($texto, $defecto) { $r = Read-Host "  $texto [$defecto]"; if ([string]::IsNullOrWhiteSpace($r)) { $defecto } else { $r.Trim() } }
+  $ip     = Pregunta 'IP del reloj' '192.168.10.252'
+  $puerto = Pregunta 'Puerto' '4370'
+  $clave  = Pregunta 'Contrasena de comunicacion del reloj (0 si no tiene)' '0'
+  do {
+    $llave = (Read-Host '  Pega la llave del reloj (Jornal > Ajustes > Empresas > Relojes)').Trim()
+    $ok = $llave -match '^jrn_[0-9a-f]{48}$'
+    if (-not $ok) { Write-Host '  Esa llave no se ve bien: empieza por jrn_ y tiene 52 caracteres.' -ForegroundColor Yellow }
+  } until ($ok)
+  $desde = Pregunta 'Subir marcaciones desde (AAAA-MM-DD)' ((Get-Date -Day 1).ToString('yyyy-MM-dd'))
+  $ini = "[reloj]`r`nip = $ip`r`npuerto = $puerto`r`nclave = $clave`r`nudp = no`r`n`r`n[jornal]`r`nllave = $llave`r`nurl = https://klsomxbzefbqugotglmh.supabase.co/functions/v1/recibir-marcaciones`r`ndesde = $desde`r`n"
+  [IO.File]::WriteAllText($cfgRuta, $ini, (New-Object Text.UTF8Encoding($false)))
+
+  Paso 'Probando el reloj y Jornal'
+  Push-Location $dir
+  & $py jornal_agente.py --probar
+  $prueba = $LASTEXITCODE
+  Pop-Location
+  if ($prueba -ne 0) { Falla 'La prueba fallo. Revisa la IP del reloj y la llave, y repite el comando.' }
+
+  Paso 'Dejando el agente funcionando'
+  $pyw = Join-Path (Split-Path $py) 'pythonw.exe'
+  $script = Join-Path $dir 'jornal_agente.py'
+  Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" -ErrorAction SilentlyContinue |
+    Where-Object { $_.CommandLine -like '*jornal_agente*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
+  schtasks /Create /TN 'Jornal agente' /TR "`"$pyw`" `"$script`"" /SC ONLOGON /RL LIMITED /F | Out-Null
+  Start-Process $pyw -ArgumentList "`"$script`"" -WorkingDirectory $dir -WindowStyle Hidden
+
+  Write-Host ''
+  Write-Host '  Listo. El agente ya esta enviando las marcaciones a Jornal.' -ForegroundColor Green
+  Write-Host '  Arranca solo cada vez que se inicia sesion en este PC.'
+  Write-Host "  Registro de lo que hace: $dir\jornal_agente.log"
+  Write-Host ''
+}
