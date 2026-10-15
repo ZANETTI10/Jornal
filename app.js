@@ -618,7 +618,12 @@
     return tabla.columnas ? tabla : C.leerArchivoBiometrico(texto);
   }
 
-  let pendientes = [], nuevosEmpleados = [];
+  let pendientes = [], nuevosEmpleados = [], renombrar = [];
+  // Nombre que llegó vacío o dañado desde el reloj ("123", "Nn-45", "Código 7", símbolos)
+  const nombreProvisional = (e) => {
+    const t = `${e.nombres || ''} ${e.apellidos || ''}`.trim();
+    return !/[A-Za-zÁÉÍÓÚÑÜáéíóúñü]{2,}/.test(t) || /^c[oó]digo\s+\d+$/i.test(t) || /^nn-?\d*/i.test(t);
+  };
   $('#archivo-bio').addEventListener('change', async (ev) => {
     const archivo = ev.target.files[0]; if (!archivo) return;
     const previa = $('#import-previa'); previa.hidden = false; previa.textContent = 'Leyendo archivo…';
@@ -630,11 +635,17 @@
     const sinFicha = new Map();
     registros.forEach((r) => { if (!porCodigo.has(r.codigo) && !sinFicha.has(r.codigo)) sinFicha.set(r.codigo, r.nombre || ''); });
     nuevosEmpleados = [...sinFicha.entries()].map(([codigo, nombre]) => ({ codigo, nombre }));
+    const nombreArchivo = new Map();
+    registros.forEach((r) => { if (r.nombre && /[A-Za-zÁÉÍÓÚÑáéíóúñ]{2,}/.test(r.nombre) && !nombreArchivo.has(r.codigo)) nombreArchivo.set(r.codigo, r.nombre); });
+    renombrar = estado.empleados.filter((e) => nombreProvisional(e) && nombreArchivo.has(String(e.codigo_biometrico)))
+      .map((e) => ({ id: e.id, codigo: String(e.codigo_biometrico), nombre: nombreArchivo.get(String(e.codigo_biometrico)) }));
     pendientes = registros.map((r) => ({ codigo: r.codigo, fecha_hora: r.fecha_hora, tipo: r.tipo || null }));
     const fechas = registros.map((r) => r.fecha_hora).sort();
     const conTipo = registros.filter((r) => r.tipo).length;
     previa.innerHTML = `
       <div><strong>${registros.length.toLocaleString('es-CO')}</strong> marcaciones de <strong>${new Set(registros.map((r) => r.codigo)).size}</strong> personas${fechas.length ? `, del ${fechaLarga(fechas[0].slice(0, 10))} al ${fechaLarga(fechas[fechas.length - 1].slice(0, 10))}` : ''}.${conTipo ? ` El archivo trae Entrada/Salida en ${conTipo.toLocaleString('es-CO')} de ellas.` : ''}</div>
+      ${renombrar.length ? `<div class="alerta"><label class="check-linea"><input type="checkbox" id="renombrar-empleados" checked> Poner el nombre a ${renombrar.length} empleados que llegaron del reloj sin nombre</label>
+        <details><summary>Ver lista</summary>${renombrar.map((n) => `<div class="mono">${esc(n.codigo)} · ${esc(n.nombre)}</div>`).join('')}</details></div>` : ''}
       ${nuevosEmpleados.length ? `<div class="alerta"><label class="check-linea"><input type="checkbox" id="crear-empleados" checked> Crear ${nuevosEmpleados.length} empleados nuevos con el nombre y el código del reloj</label>
         <span class="sub">Quedan con salario mínimo provisional y marcados "Completar ficha" para que pongas cédula, salario y fecha de ingreso antes de liquidar.</span>
         <details><summary>Ver lista</summary>${nuevosEmpleados.map((n) => `<div class="mono">${esc(n.codigo)} · ${esc(n.nombre || 'sin nombre')}</div>`).join('')}</details></div>` : ''}
@@ -656,6 +667,11 @@
         })));
         await cargarEmpleados();
       }
+      const ren = $('#renombrar-empleados');
+      if (renombrar.length && ren && ren.checked) {
+        for (const r of renombrar) await db.actualizar('empleados', r.id, separarNombre(r.nombre));
+        await cargarEmpleados();
+      }
       const porCodigo = new Map(estado.empleados.map((e) => [String(e.codigo_biometrico), e.id]));
       const filas = pendientes.map((m) => ({
         empresa_id: estado.empresaId, empleado_id: porCodigo.get(m.codigo) || null, codigo_biometrico: m.codigo,
@@ -666,7 +682,7 @@
       // dejar la asistencia mostrando el rango del archivo
       const fs = pendientes.map((m) => m.fecha_hora).sort();
       $('#asis-desde').value = fs[0].slice(0, 10); $('#asis-hasta').value = fs[fs.length - 1].slice(0, 10);
-      pendientes = []; nuevosEmpleados = [];
+      pendientes = []; nuevosEmpleados = []; renombrar = [];
       $('#archivo-bio').value = ''; $('#import-previa').hidden = true; btn.hidden = true;
       invalidarDatos(); verAsistencia();
     } finally { btn.disabled = false; btn.textContent = 'Guardar marcaciones'; }
