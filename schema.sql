@@ -515,3 +515,69 @@ begin
 end $$;
 revoke all on function public.generar_llave_dispositivo(uuid) from public, anon;
 grant execute on function public.generar_llave_dispositivo(uuid) to authenticated;
+
+-- ---------------------------------------------------------------------
+-- 13. Usuarios del reloj y órdenes para el reloj (2026-10-14)
+--     reloj_usuarios: copia de los usuarios que tiene cada reloj (la manda el agente)
+--     comandos_reloj: órdenes que Jornal deja para que el agente las ejecute en el reloj
+--                     (poner nombre, eliminar usuario)
+-- ---------------------------------------------------------------------
+create table if not exists public.reloj_usuarios (
+  dispositivo_id    uuid not null references public.dispositivos(id) on delete cascade,
+  empresa_id        uuid not null references public.empresas(id) on delete cascade,
+  codigo            text not null,
+  uid               int,
+  nombre            text,
+  privilegio        int default 0,
+  ultima_marcacion  timestamp,
+  marcaciones       int default 0,
+  actualizado       timestamptz not null default now(),
+  primary key (dispositivo_id, codigo)
+);
+create index if not exists idx_reloj_usuarios_empresa on public.reloj_usuarios(empresa_id);
+
+create table if not exists public.comandos_reloj (
+  id              bigint generated always as identity primary key,
+  dispositivo_id  uuid not null references public.dispositivos(id) on delete cascade,
+  empresa_id      uuid not null references public.empresas(id) on delete cascade,
+  tipo            text not null check (tipo in ('nombre','eliminar')),
+  codigo          text not null,
+  nombre          text,
+  estado          text not null default 'pendiente' check (estado in ('pendiente','hecho','error','cancelado')),
+  resultado       text,
+  creado_por      uuid default auth.uid(),
+  creado_en       timestamptz not null default now(),
+  hecho_en        timestamptz
+);
+create index if not exists idx_comandos_pendientes on public.comandos_reloj(dispositivo_id) where estado = 'pendiente';
+
+alter table public.reloj_usuarios enable row level security;
+alter table public.comandos_reloj enable row level security;
+drop policy if exists reloj_usuarios_select on public.reloj_usuarios;
+create policy reloj_usuarios_select on public.reloj_usuarios for select to authenticated
+  using (public.puede_ver_empresa(empresa_id));
+drop policy if exists comandos_select on public.comandos_reloj;
+create policy comandos_select on public.comandos_reloj for select to authenticated
+  using (public.puede_ver_empresa(empresa_id));
+drop policy if exists comandos_staff on public.comandos_reloj;
+create policy comandos_staff on public.comandos_reloj for all to authenticated
+  using (public.es_staff()) with check (public.es_staff());
+
+-- Si en Jornal le cambian el nombre a un empleado, se deja la orden de ponerlo también en el reloj.
+-- No aplica cuando el cambio viene del propio reloj (la función usa la llave de servicio).
+create or replace function public.nombre_al_reloj() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if coalesce(auth.role(), '') = 'service_role' then return new; end if;
+  if new.codigo_biometrico is null then return new; end if;
+  if (new.nombres, new.apellidos) is not distinct from (old.nombres, old.apellidos) then return new; end if;
+  if trim(new.nombres || ' ' || new.apellidos) !~ '[A-Za-zÁÉÍÓÚÑÜáéíóúñü]{2,}' then return new; end if;
+  update public.comandos_reloj set estado = 'cancelado'
+    where estado = 'pendiente' and tipo = 'nombre' and empresa_id = new.empresa_id and codigo = new.codigo_biometrico;
+  insert into public.comandos_reloj (dispositivo_id, empresa_id, tipo, codigo, nombre)
+    select d.id, new.empresa_id, 'nombre', new.codigo_biometrico, trim(new.nombres || ' ' || new.apellidos)
+    from public.dispositivos d where d.empresa_id = new.empresa_id and d.activo and d.token_hash is not null;
+  return new;
+end $$;
+create or replace trigger trg_nombre_al_reloj after update of nombres, apellidos on public.empleados
+  for each row execute function public.nombre_al_reloj();

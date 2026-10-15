@@ -910,7 +910,7 @@
         <p class="nota">${esc(datos || 'Sin datos del reloj todavía')}</p>
         <p class="nota">Último contacto: ${haceCuanto(r.ultimo_contacto)}${r.ultimo_evento ? ` · última marcación: ${esc(String(r.ultimo_evento).slice(0, 16).replace('T', ' '))}` : ''}</p>
         <div class="reloj-llave" hidden></div>
-        ${esAdmin() ? `<div class="acciones-fila"><button class="btn btn-mini" type="button" data-llave="${r.id}">${r.token_hash ? 'Cambiar llave' : 'Generar llave'}</button><button class="btn btn-mini" type="button" data-activo="${r.id}">${r.activo ? 'Desactivar' : 'Activar'}</button>${r.activo ? '' : `<button class="btn btn-mini btn-peligro" type="button" data-borrar-reloj="${r.id}">Eliminar</button>`}</div>` : ''}
+        ${esAdmin() ? `<div class="acciones-fila">${r.token_hash ? `<button class="btn btn-mini btn-primario" type="button" data-usuarios-reloj="${r.id}">Usuarios del reloj</button>` : ''}<button class="btn btn-mini" type="button" data-llave="${r.id}">${r.token_hash ? 'Cambiar llave' : 'Generar llave'}</button><button class="btn btn-mini" type="button" data-activo="${r.id}">${r.activo ? 'Desactivar' : 'Activar'}</button>${r.activo ? '' : `<button class="btn btn-mini btn-peligro" type="button" data-borrar-reloj="${r.id}">Eliminar</button>`}</div>` : ''}
       </div>`;
     };
     abrirDialogo({
@@ -951,11 +951,112 @@
       await db.actualizar('dispositivos', r.id, { activo: !r.activo });
       $('#dialogo').close(); aviso(r.activo ? 'Reloj desactivado' : 'Reloj activado'); verRelojes(emp);
     })));
+    $$('#dialogo [data-usuarios-reloj]').forEach((b) => b.addEventListener('click', () => {
+      $('#dialogo').close(); verUsuariosReloj(emp, relojes.find((x) => x.id === b.dataset.usuariosReloj));
+    }));
     $$('#dialogo [data-borrar-reloj]').forEach((b) => b.addEventListener('click', () => intentar(async () => {
       if (b.dataset.seguro !== '1') { b.dataset.seguro = '1'; b.textContent = '¿Seguro? Toca otra vez'; return; }
       await db.eliminar('dispositivos', b.dataset.borrarReloj);
       $('#dialogo').close(); aviso('Reloj eliminado; sus marcaciones se conservan'); verRelojes(emp);
     })));
+  }
+
+  // Usuarios que tiene el reloj frente a los empleados de Jornal: nombres, duplicados y personas que ya no marcan.
+  // Las órdenes (poner nombre, eliminar) las ejecuta el agente del PC en el reloj en 1 o 2 minutos.
+  const plano = (t) => String(t || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z]+/g, ' ').trim();
+  const DIAS_VIEJO = 90;
+  async function verUsuariosReloj(emp, reloj, filtro = 'revisar') {
+    const [usuarios, emps, ordenes] = await Promise.all([
+      intentar(() => db.listar('reloj_usuarios', { eq: { dispositivo_id: reloj.id } })),
+      intentar(() => db.listar('empleados', { eq: { empresa_id: emp.id } })),
+      intentar(() => db.listar('comandos_reloj', { eq: { dispositivo_id: reloj.id, estado: 'pendiente' } })),
+    ]);
+    if (!usuarios) return;
+    const porCodigo = new Map((emps || []).map((e) => [String(e.codigo_biometrico), e]));
+    const pendiente = new Map((ordenes || []).map((o) => [o.codigo, o]));
+    const hoy = Date.now();
+    const filas = usuarios.map((u) => {
+      const e = porCodigo.get(u.codigo);
+      const nj = e && !nombreProvisional(e) ? `${e.nombres} ${e.apellidos || ''}`.trim() : '';
+      const dias = u.ultima_marcacion ? Math.floor((hoy - new Date(String(u.ultima_marcacion).replace(' ', 'T')).getTime()) / 864e5) : null;
+      return { ...u, emp: e, nj, dias, clave: plano(nj || u.nombre) };
+    });
+    // Posible duplicado: el mismo nombre en dos códigos, o uno es el comienzo del otro ("Daniela Henao" / "Daniela Henao Restrepo")
+    const dup = new Set();
+    const nombresDe = (f) => [...new Set([plano(f.nj), plano(f.nombre)].filter((x) => x.split(' ').length >= 2))];
+    for (let i = 0; i < filas.length; i++) for (let j = i + 1; j < filas.length; j++) {
+      if (filas[i].codigo === filas[j].codigo) continue;
+      const a = nombresDe(filas[i]), b = nombresDe(filas[j]);
+      if (a.some((x) => b.some((y) => x === y || x.startsWith(y + ' ') || y.startsWith(x + ' ')))) { dup.add(i); dup.add(j); }
+    }
+    filas.forEach((f, i) => {
+      f.sinNombre = !f.nombre;
+      f.distinto = !!f.nj && plano(f.nj).slice(0, 20) !== plano(f.nombre).slice(0, 20);
+      f.viejo = f.dias === null || f.dias > DIAS_VIEJO;
+      f.duplicado = dup.has(i);
+      f.admin = f.privilegio === 14;
+      f.orden = pendiente.get(f.codigo);
+      f.revisar = f.sinNombre || f.distinto || f.viejo || f.duplicado;
+    });
+    filas.sort((a, b) => (a.clave || '~').localeCompare(b.clave || '~') || (+a.codigo - +b.codigo));
+    const FILTROS = [['revisar', 'Para revisar'], ['nombre', 'Sin nombre o distinto'], ['duplicado', 'Posibles duplicados'], ['viejo', `No marcan hace +${DIAS_VIEJO} días`], ['todos', 'Todos']];
+    const pasa = (f) => ({ revisar: f.revisar, nombre: f.sinNombre || f.distinto, duplicado: f.duplicado, viejo: f.viejo, todos: true }[filtro]);
+    const vista = filas.filter(pasa);
+    const paraNombre = filas.filter((f) => f.nj && (f.sinNombre || f.distinto) && !f.orden);
+    const chips = (f) => [
+      f.orden ? `<span class="chip chip-aviso">Pendiente: ${f.orden.tipo === 'eliminar' ? 'eliminar' : 'poner nombre'}</span>` : '',
+      f.admin ? '<span class="chip">Admin del reloj</span>' : '',
+      f.sinNombre ? '<span class="chip chip-aviso">Sin nombre</span>' : f.distinto ? '<span class="chip chip-aviso">Nombre distinto</span>' : '',
+      f.duplicado ? '<span class="chip chip-critico">Posible duplicado</span>' : '',
+      f.viejo ? `<span class="chip">${f.dias === null ? 'Nunca ha marcado' : `Sin marcar hace ${f.dias} días`}</span>` : '',
+    ].join(' ');
+    const actualizado = usuarios.reduce((m, u) => (u.actualizado > m ? u.actualizado : m), '');
+    abrirDialogo({
+      titulo: `Usuarios del reloj · ${reloj.nombre}`,
+      campos: [{ tipo: 'texto', html: `<div class="ancho usuarios-reloj">
+        <p class="nota">${usuarios.length} usuarios en el reloj · lista actualizada ${haceCuanto(actualizado)}. Las órdenes las ejecuta el agente del PC en 1 o 2 minutos.</p>
+        ${usuarios.length ? '' : '<div class="alerta">El agente todavía no ha enviado la lista de usuarios. Actualízalo en el PC de la empresa con el mismo comando de instalación y espera unos minutos.</div>'}
+        <div class="filtros">${FILTROS.map(([k, t]) => `<button type="button" class="btn btn-mini ${k === filtro ? 'btn-primario' : ''}" data-filtro="${k}">${t} (${filas.filter((f) => ({ revisar: f.revisar, nombre: f.sinNombre || f.distinto, duplicado: f.duplicado, viejo: f.viejo, todos: true }[k])).length})</button>`).join('')}</div>
+        <div class="acciones-fila acciones-reloj">
+          <button type="button" class="btn btn-mini" data-accion="nombres" ${paraNombre.length ? '' : 'disabled'}>Poner en el reloj los nombres de Jornal (${paraNombre.length})</button>
+          <button type="button" class="btn btn-mini btn-peligro" data-accion="eliminar" disabled>Eliminar del reloj (0)</button>
+          ${ordenes && ordenes.length ? `<button type="button" class="btn btn-mini" data-accion="cancelar">Cancelar ${ordenes.length} órdenes pendientes</button>` : ''}
+        </div>
+        <label class="check-linea"><input type="checkbox" id="retirar-jornal" checked> Al eliminar, marcar también como retirado en Jornal</label>
+        <div class="tabla-envoltura"><table class="tabla tabla-compacta"><thead><tr><th></th><th>Código</th><th>En el reloj</th><th>En Jornal</th><th>Última marca</th><th>Estado</th></tr></thead><tbody>
+        ${vista.map((f) => `<tr><td>${f.admin || f.orden ? '' : `<input type="checkbox" data-sel="${esc(f.codigo)}" aria-label="Seleccionar código ${esc(f.codigo)}">`}</td>
+          <td class="mono">${esc(f.codigo)}</td><td>${esc(f.nombre || '—')}</td><td>${esc(f.nj || (f.emp ? 'Sin nombre' : 'No está en Jornal'))}</td>
+          <td class="mono">${f.ultima_marcacion ? esc(String(f.ultima_marcacion).slice(0, 10)) : '—'}</td><td>${chips(f)}</td></tr>`).join('') || '<tr><td colspan="6" class="tenue">Nada para revisar aquí.</td></tr>'}
+        </tbody></table></div></div>` }],
+      textoGuardar: 'Cerrar', alGuardar: async () => {},
+    });
+    const caja = $('#dialogo .usuarios-reloj');
+    caja.querySelectorAll('[data-filtro]').forEach((b) => b.addEventListener('click', () => { $('#dialogo').close(); verUsuariosReloj(emp, reloj, b.dataset.filtro); }));
+    const btnEliminar = caja.querySelector('[data-accion="eliminar"]');
+    const seleccion = () => [...caja.querySelectorAll('[data-sel]:checked')].map((c) => c.dataset.sel);
+    caja.querySelectorAll('[data-sel]').forEach((c) => c.addEventListener('change', () => {
+      const n = seleccion().length; btnEliminar.disabled = !n; btnEliminar.textContent = `Eliminar del reloj (${n})`; delete btnEliminar.dataset.seguro;
+    }));
+    const recargar = (texto) => { aviso(texto); $('#dialogo').close(); verUsuariosReloj(emp, reloj, filtro); };
+    caja.querySelector('[data-accion="nombres"]').addEventListener('click', () => intentar(async () => {
+      await db.insertar('comandos_reloj', paraNombre.map((f) => ({ dispositivo_id: reloj.id, empresa_id: emp.id, tipo: 'nombre', codigo: f.codigo, nombre: f.nj })));
+      recargar(`${paraNombre.length} nombres enviados al reloj`);
+    }));
+    btnEliminar.addEventListener('click', () => intentar(async () => {
+      const cods = seleccion(); if (!cods.length) return;
+      if (btnEliminar.dataset.seguro !== '1') { btnEliminar.dataset.seguro = '1'; btnEliminar.textContent = `¿Seguro? Se borran ${cods.length} usuarios y sus huellas del reloj. Toca otra vez`; return; }
+      await db.insertar('comandos_reloj', cods.map((c) => ({ dispositivo_id: reloj.id, empresa_id: emp.id, tipo: 'eliminar', codigo: c })));
+      if ($('#retirar-jornal').checked) {
+        for (const c of cods) { const e = porCodigo.get(c); if (e && e.activo !== false) await db.actualizar('empleados', e.id, { activo: false }); }
+        if (emp.id === estado.empresaId) await cargarEmpleados();
+      }
+      recargar(`${cods.length} usuarios se eliminarán del reloj en 1 o 2 minutos`);
+    }));
+    const btnCancelar = caja.querySelector('[data-accion="cancelar"]');
+    if (btnCancelar) btnCancelar.addEventListener('click', () => intentar(async () => {
+      for (const o of ordenes) await db.actualizar('comandos_reloj', o.id, { estado: 'cancelado' });
+      recargar('Órdenes canceladas');
+    }));
   }
 
   $('#btn-nueva-empresa').addEventListener('click', () => editarEmpresa(null));

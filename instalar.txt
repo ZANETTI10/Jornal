@@ -51,16 +51,23 @@
 
   Paso 'Datos del reloj'
   $cfgRuta = Join-Path $dir 'config.ini'
+  # Si ya estaba instalado, se ofrecen los datos actuales (Enter para dejarlos)
+  $previo = @{}
+  if (Test-Path $cfgRuta) { Get-Content $cfgRuta | ForEach-Object { if ($_ -match '^\s*(\w+)\s*=\s*(.+?)\s*$') { $previo[$matches[1]] = $matches[2] } } }
+  function Previo($k, $d) { if ($previo.ContainsKey($k)) { $previo[$k] } else { $d } }
   function Pregunta($texto, $defecto) { $r = Read-Host "  $texto [$defecto]"; if ([string]::IsNullOrWhiteSpace($r)) { $defecto } else { $r.Trim() } }
-  $ip     = Pregunta 'IP del reloj' '192.168.10.252'
-  $puerto = Pregunta 'Puerto' '4370'
-  $clave  = Pregunta 'Contrasena de comunicacion del reloj (0 si no tiene)' '0'
+  $ip     = Pregunta 'IP del reloj' (Previo 'ip' '192.168.10.252')
+  $puerto = Pregunta 'Puerto' (Previo 'puerto' '4370')
+  $clave  = Pregunta 'Contrasena de comunicacion del reloj (0 si no tiene)' (Previo 'clave' '0')
+  $llaveAnterior = Previo 'llave' ''
   do {
-    $llave = (Read-Host '  Pega la llave del reloj (Jornal > Ajustes > Empresas > Relojes)').Trim()
+    $texto = if ($llaveAnterior) { '  Pega la llave del reloj (Enter para dejar la que ya tiene)' } else { '  Pega la llave del reloj (Jornal > Ajustes > Empresas > Relojes)' }
+    $llave = (Read-Host $texto).Trim()
+    if (-not $llave -and $llaveAnterior) { $llave = $llaveAnterior }
     $ok = $llave -match '^jrn_[0-9a-f]{48}$'
     if (-not $ok) { Write-Host '  Esa llave no se ve bien: empieza por jrn_ y tiene 52 caracteres.' -ForegroundColor Yellow }
   } until ($ok)
-  $desde = Pregunta 'Subir marcaciones desde (AAAA-MM-DD)' ((Get-Date -Day 1).ToString('yyyy-MM-dd'))
+  $desde = Pregunta 'Subir marcaciones desde (AAAA-MM-DD)' (Previo 'desde' ((Get-Date -Day 1).ToString('yyyy-MM-dd')))
   $ini = "[reloj]`r`nip = $ip`r`npuerto = $puerto`r`nclave = $clave`r`nudp = no`r`n`r`n[jornal]`r`nllave = $llave`r`nurl = https://klsomxbzefbqugotglmh.supabase.co/functions/v1/recibir-marcaciones`r`ndesde = $desde`r`n"
   [IO.File]::WriteAllText($cfgRuta, $ini, (New-Object Text.UTF8Encoding($false)))
 

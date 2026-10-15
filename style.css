@@ -245,6 +245,12 @@ select:disabled { opacity: 1; background: transparent !important; border-color: 
 .lista-accesos { display: grid; gap: 4px; }
 .lista-accesos div { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--linea-suave); }
 .lista-relojes { display: grid; gap: 10px; }
+.usuarios-reloj { display: grid; gap: 10px; }
+.usuarios-reloj .filtros, .acciones-reloj { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-start; }
+.usuarios-reloj .tabla-envoltura { max-height: 52vh; overflow: auto; }
+.tabla-compacta td, .tabla-compacta th { padding: 7px 10px; }
+.tabla-compacta .chip { margin: 1px 0; }
+.dialogo:has(.usuarios-reloj) { width: min(980px, calc(100vw - 24px)); }
 .reloj { border: 1px solid var(--linea); border-radius: var(--r-s); padding: 12px 14px; display: grid; gap: 4px; background: var(--superficie-2); }
 .reloj-cabeza { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .reloj .acciones-fila { justify-content: flex-start; padding-top: 6px; }
