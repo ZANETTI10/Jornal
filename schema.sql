@@ -490,3 +490,28 @@ drop trigger if exists aud_marc_manual on public.marcaciones;
 create trigger aud_marc_manual after insert on public.marcaciones for each row when (new.origen = 'manual') execute function public.registrar_auditoria();
 drop trigger if exists aud_marc_cambios on public.marcaciones;
 create trigger aud_marc_cambios after update or delete on public.marcaciones for each row execute function public.registrar_auditoria();
+
+-- ---------------------------------------------------------------------
+-- 12. Relojes conectados por el agente (2026-10-14)
+--     El agente del PC envía marcaciones a la Edge Function
+--     "recibir-marcaciones" con una llave propia de cada reloj; aquí solo
+--     se guarda su huella SHA-256.
+-- ---------------------------------------------------------------------
+create extension if not exists pgcrypto with schema extensions;
+alter table public.dispositivos add column if not exists token_hash text unique;
+alter table public.dispositivos add column if not exists ultimo_evento timestamp;
+alter table public.dispositivos add column if not exists info jsonb;
+alter table public.dispositivos alter column modo set default 'pull';
+
+create or replace function public.generar_llave_dispositivo(p_dispositivo uuid)
+returns text language plpgsql security definer set search_path = public, extensions as $$
+declare v_llave text;
+begin
+  if not public.es_admin() then raise exception 'Solo un administrador puede generar llaves'; end if;
+  if not exists (select 1 from public.dispositivos where id = p_dispositivo) then raise exception 'El reloj no existe'; end if;
+  v_llave := 'jrn_' || encode(extensions.gen_random_bytes(24), 'hex');
+  update public.dispositivos set token_hash = encode(extensions.digest(v_llave, 'sha256'), 'hex') where id = p_dispositivo;
+  return v_llave;
+end $$;
+revoke all on function public.generar_llave_dispositivo(uuid) from public, anon;
+grant execute on function public.generar_llave_dispositivo(uuid) to authenticated;

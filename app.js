@@ -819,10 +819,11 @@
       estado.empresas.map((e) => `<tr data-id="${e.id}"><td>${esc(e.nombre)}<span class="sub">${esc([e.nit, e.ciudad].filter(Boolean).join(' · '))}</span></td>
         <td>${e.slug ? `<span class="mono enlace">${esc(enlaceEmpresa(e))}</span> <button class="btn btn-fantasma btn-mini" data-copiar="${esc(enlaceEmpresa(e))}" type="button">Copiar</button>` : '<span class="tenue">Sin enlace: edita la empresa y ponle un nombre de enlace</span>'}</td>
         <td>${esc(e.periodicidad)}</td><td>${e.exonerada_aportes ? 'Exonerada 114-1' : 'Paga todos'}</td>
-        <td class="acciones-fila"><button class="btn btn-mini" data-accesos="${e.id}" type="button">Accesos</button><button class="btn btn-mini" data-editar="${e.id}" type="button">Editar</button></td></tr>`).join('')
+        <td class="acciones-fila"><button class="btn btn-mini" data-relojes="${e.id}" type="button">Relojes</button><button class="btn btn-mini" data-accesos="${e.id}" type="button">Accesos</button><button class="btn btn-mini" data-editar="${e.id}" type="button">Editar</button></td></tr>`).join('')
       || '<tr><td colspan="5" class="tenue">Agrega tu primera empresa cliente.</td></tr>'}</tbody>`;
     t.querySelectorAll('[data-editar]').forEach((b) => b.addEventListener('click', () => editarEmpresa(estado.empresas.find((e) => e.id === b.dataset.editar))));
     t.querySelectorAll('[data-accesos]').forEach((b) => b.addEventListener('click', () => verAccesos(estado.empresas.find((e) => e.id === b.dataset.accesos))));
+    t.querySelectorAll('[data-relojes]').forEach((b) => b.addEventListener('click', () => verRelojes(estado.empresas.find((e) => e.id === b.dataset.relojes))));
     t.querySelectorAll('[data-copiar]').forEach((b) => b.addEventListener('click', async () => {
       try { await navigator.clipboard.writeText(b.dataset.copiar); aviso('Enlace copiado'); }
       catch (e) { const r = document.createRange(); r.selectNodeContents(b.previousElementSibling); getSelection().removeAllRanges(); getSelection().addRange(r); aviso('Selecciona y copia el enlace'); }
@@ -868,6 +869,77 @@
       await intentar(() => db.rpc('quitar_usuario_empresa', { p_usuario: b.dataset.quitar, p_empresa: emp.id }));
       $('#dialogo').close(); aviso('Acceso retirado'); verAccesos(emp);
     }));
+  }
+
+  // Relojes biométricos de la empresa: el agente del PC los lee y envía las marcaciones en vivo
+  const haceCuanto = (iso) => {
+    if (!iso) return 'nunca';
+    const min = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+    if (min < 1) return 'hace un momento';
+    if (min < 60) return `hace ${min} min`;
+    if (min < 1440) return `hace ${Math.round(min / 60)} h`;
+    return `hace ${Math.round(min / 1440)} días`;
+  };
+  async function verRelojes(emp) {
+    const relojes = (await intentar(() => db.listar('dispositivos', { eq: { empresa_id: emp.id } }))) || [];
+    const fila = (r) => {
+      const vivo = r.ultimo_contacto && Date.now() - new Date(r.ultimo_contacto).getTime() < 40 * 60000;
+      const chip = !r.activo ? '<span class="chip">Inactivo</span>'
+        : !r.token_hash ? '<span class="chip chip-aviso">Falta la llave</span>'
+        : vivo ? '<span class="chip chip-ok">Conectado</span>' : '<span class="chip chip-critico">Sin señal</span>';
+      const i = r.info || {};
+      const datos = [r.ip && `${r.ip}:${r.puerto || 4370}`, i.modelo || r.modelo, i.usuarios != null && `${i.usuarios} usuarios`, i.huellas != null && `${i.huellas} huellas`].filter(Boolean).join(' · ');
+      return `<div class="reloj" data-reloj="${r.id}">
+        <div class="reloj-cabeza"><strong>${esc(r.nombre)}</strong>${chip}</div>
+        <p class="nota">${esc(datos || 'Sin datos del reloj todavía')}</p>
+        <p class="nota">Último contacto: ${haceCuanto(r.ultimo_contacto)}${r.ultimo_evento ? ` · última marcación: ${esc(String(r.ultimo_evento).slice(0, 16).replace('T', ' '))}` : ''}</p>
+        <div class="reloj-llave" hidden></div>
+        ${esAdmin() ? `<div class="acciones-fila"><button class="btn btn-mini" type="button" data-llave="${r.id}">${r.token_hash ? 'Cambiar llave' : 'Generar llave'}</button><button class="btn btn-mini" type="button" data-activo="${r.id}">${r.activo ? 'Desactivar' : 'Activar'}</button>${r.activo ? '' : `<button class="btn btn-mini btn-peligro" type="button" data-borrar-reloj="${r.id}">Eliminar</button>`}</div>` : ''}
+      </div>`;
+    };
+    abrirDialogo({
+      titulo: `Relojes · ${emp.nombre}`,
+      campos: [
+        { tipo: 'texto', html: `<div class="ancho lista-relojes">${relojes.map(fila).join('') || '<p class="nota">Esta empresa todavía no tiene relojes conectados.</p>'}</div>
+          <p class="ancho nota">Para conectar un reloj: agrégalo aquí, genera su llave y en el PC de la empresa (el que está en la misma red del reloj) descarga y ejecuta el <a href="jornal-agente.zip" download>agente de Jornal</a>. Las marcaciones llegan en segundos.</p>` },
+        ...(esAdmin() ? [
+          { tipo: 'texto', html: '<h3 class="ancho">Agregar reloj</h3>' },
+          { nombre: 'nombre', etiqueta: 'Nombre', requerido: true, defecto: relojes.length ? '' : 'Reloj principal' },
+          { nombre: 'ip', etiqueta: 'IP en la red de la empresa', defecto: '' },
+          { nombre: 'puerto', etiqueta: 'Puerto', tipo: 'number', defecto: 4370 },
+        ] : []),
+      ],
+      textoGuardar: esAdmin() ? 'Agregar reloj' : 'Cerrar',
+      alGuardar: async (d) => {
+        if (!esAdmin()) return;
+        await db.insertar('dispositivos', [{ empresa_id: emp.id, nombre: d.nombre, ip: d.ip, puerto: d.puerto || 4370, marca: 'ZKTeco', modo: 'pull', activo: true }]);
+        aviso('Reloj agregado. Ahora genera su llave.');
+        setTimeout(() => verRelojes(emp), 50);
+      },
+    });
+    $$('#dialogo [data-llave]').forEach((b) => b.addEventListener('click', () => intentar(async () => {
+      const r = relojes.find((x) => x.id === b.dataset.llave);
+      if (r.token_hash && b.dataset.seguro !== '1') { b.dataset.seguro = '1'; b.textContent = '¿Seguro? El agente actual dejará de enviar. Toca otra vez'; return; }
+      const llave = await db.rpc('generar_llave_dispositivo', { p_dispositivo: r.id });
+      const caja = b.closest('.reloj').querySelector('.reloj-llave');
+      caja.innerHTML = `<label>Llave del reloj (solo se muestra esta vez; pégala en el agente)</label>
+        <div class="llave-fila"><input type="text" readonly class="mono" value="${esc(llave)}"><button class="btn btn-mini btn-primario" type="button">Copiar</button></div>`;
+      caja.hidden = false; b.remove();
+      const inp = caja.querySelector('input'); inp.select();
+      caja.querySelector('button').addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(llave); aviso('Llave copiada'); } catch (e) { inp.select(); aviso('Selecciónala y cópiala con Ctrl+C'); }
+      });
+    })));
+    $$('#dialogo [data-activo]').forEach((b) => b.addEventListener('click', () => intentar(async () => {
+      const r = relojes.find((x) => x.id === b.dataset.activo);
+      await db.actualizar('dispositivos', r.id, { activo: !r.activo });
+      $('#dialogo').close(); aviso(r.activo ? 'Reloj desactivado' : 'Reloj activado'); verRelojes(emp);
+    })));
+    $$('#dialogo [data-borrar-reloj]').forEach((b) => b.addEventListener('click', () => intentar(async () => {
+      if (b.dataset.seguro !== '1') { b.dataset.seguro = '1'; b.textContent = '¿Seguro? Toca otra vez'; return; }
+      await db.eliminar('dispositivos', b.dataset.borrarReloj);
+      $('#dialogo').close(); aviso('Reloj eliminado; sus marcaciones se conservan'); verRelojes(emp);
+    })));
   }
 
   $('#btn-nueva-empresa').addEventListener('click', () => editarEmpresa(null));

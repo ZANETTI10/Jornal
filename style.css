@@ -244,6 +244,13 @@ select:disabled { opacity: 1; background: transparent !important; border-color: 
 .quitar-chip { border: 0; background: none; color: inherit; cursor: pointer; font-size: 1.1rem; line-height: 1; padding: 0 2px 0 6px; }
 .lista-accesos { display: grid; gap: 4px; }
 .lista-accesos div { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--linea-suave); }
+.lista-relojes { display: grid; gap: 10px; }
+.reloj { border: 1px solid var(--linea); border-radius: var(--r-s); padding: 12px 14px; display: grid; gap: 4px; background: var(--superficie-2); }
+.reloj-cabeza { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.reloj .acciones-fila { justify-content: flex-start; padding-top: 6px; }
+.reloj-llave { padding-top: 8px; }
+.llave-fila { display: flex; gap: 8px; }
+.llave-fila input { font-size: 0.85rem; }
 .festivos { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 4px 18px; font-size: 0.92rem; }
 .festivos div { display: flex; gap: 10px; border-bottom: 1px solid var(--linea-suave); padding: 5px 0; }
 .festivos .mono { color: var(--tinta-suave); }
