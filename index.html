@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#111823">
 <title>Jornal</title>
 <link rel="preload" href="sora.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="style.css?v=20261022c">
+<link rel="stylesheet" href="style.css?v=20261022d">
 </head>
 <body>
 <!--CUERPO-->
@@ -59,6 +59,7 @@
     <button type="button" data-vista="tablero" class="activa" aria-current="page"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="9" rx="1.5"/><rect x="13.5" y="3.5" width="7" height="5" rx="1.5"/><rect x="13.5" y="11.5" width="7" height="9" rx="1.5"/><rect x="3.5" y="15.5" width="7" height="5" rx="1.5"/></svg><span>Tablero</span></button>
     <button type="button" data-vista="asistencia"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></svg><span>Asistencia</span></button>
     <button type="button" data-vista="empleados"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8.5" r="3.2"/><path d="M3 19.5c.6-3.2 3-5 6-5s5.4 1.8 6 5"/><path d="M15.5 5.6a3.2 3.2 0 0 1 0 5.8"/><path d="M17.5 14.9c1.9.6 3.1 2.2 3.5 4.6"/></svg><span>Empleados</span></button>
+    <button type="button" data-vista="horarios"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"/><path d="M3.5 9.5h17M8 3v4M16 3v4"/><path d="M8 13.5h3M13 13.5h3M8 16.5h3"/></svg><span>Horarios</span></button>
     <button type="button" data-vista="novedades"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h9l3.5 3.5v13.5H6z"/><path d="M14.5 3.5V7.5h4"/><path d="M12 11v5M9.5 13.5h5"/></svg><span>Novedades</span></button>
     <button type="button" data-vista="liquidacion"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="6" width="18" height="12" rx="2"/><circle cx="12" cy="12" r="2.6"/><path d="M6.5 9.5v5M17.5 9.5v5"/></svg><span>Nómina</span></button>
     <button type="button" data-vista="admin" class="separa"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h9M17 7h3M4 12h3M11 12h9M4 17h11M19 17h1"/><circle cx="15" cy="7" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="17" r="2"/></svg><span>Ajustes</span></button>
@@ -144,6 +145,24 @@
       <div class="tabla-envoltura"><table id="tabla-empleados" class="tabla"></table></div>
     </section>
 
+    <!-- HORARIOS -->
+    <section id="vista-horarios" class="vista" hidden>
+      <div class="controles">
+        <div class="campo"><label for="hor-semana">Semana del</label><input id="hor-semana" type="date"></div>
+        <div class="campo campo-rango"><span class="eyebrow">Fechas</span><span id="hor-rango" class="mono"></span></div>
+        <div class="acciones">
+          <button id="hor-ant" class="btn" type="button">Semana anterior</button>
+          <button id="hor-sig" class="btn" type="button">Semana siguiente</button>
+          <button id="hor-copiar" class="btn" type="button">Copiar semana anterior</button>
+        </div>
+      </div>
+      <div id="hor-modos" class="subnav" aria-label="Horarios">
+        <button type="button" data-modo="programar" class="activa">Programación</button>
+        <button type="button" data-modo="comparar">Programado vs. laborado</button>
+      </div>
+      <div id="horarios"></div>
+    </section>
+
     <!-- NOVEDADES -->
     <section id="vista-novedades" class="vista" hidden>
       <div class="encabezado-vista"><h2>Novedades</h2><button id="btn-nueva-novedad" class="btn btn-primario" type="button">Agregar novedad</button></div>
@@ -203,9 +222,9 @@
 <!--/CUERPO-->
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-<script src="config.js?v=20261022c"></script>
-<script src="calculo.js?v=20261022c"></script>
-<script src="datos.js?v=20261022c"></script>
-<script src="app.js?v=20261022c"></script>
+<script src="config.js?v=20261022d"></script>
+<script src="calculo.js?v=20261022d"></script>
+<script src="datos.js?v=20261022d"></script>
+<script src="app.js?v=20261022d"></script>
 </body>
 </html>

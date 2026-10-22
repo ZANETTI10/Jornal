@@ -587,3 +587,23 @@ alter table public.empleados add column if not exists en_nomina boolean not null
 
 -- 15. Horas extra compensadas en tiempo (2026-10-22)
 alter table public.empresas add column if not exists extras_en_tiempo boolean not null default false;
+
+-- 16. Horarios programados por persona y día (2026-10-22)
+create table if not exists public.horarios (
+  id            bigint generated always as identity primary key,
+  empresa_id    uuid not null references public.empresas(id) on delete cascade,
+  empleado_id   uuid not null references public.empleados(id) on delete cascade,
+  fecha         date not null,
+  estado        text not null default 'trabaja' check (estado in ('trabaja','descanso','vacaciones','incapacidad','permiso')),
+  am_entrada    time, am_salida time,
+  pm_entrada    time, pm_salida time,
+  funcion       text,
+  actualizado   timestamptz not null default now(),
+  unique (empleado_id, fecha)
+);
+create index if not exists idx_horarios_empresa_fecha on public.horarios(empresa_id, fecha);
+alter table public.horarios enable row level security;
+create policy horarios_ver on public.horarios for select to authenticated using (public.puede_ver_empresa(empresa_id));
+create policy horarios_editar on public.horarios for insert to authenticated with check (public.puede_ver_empresa(empresa_id));
+create policy horarios_cambiar on public.horarios for update to authenticated using (public.puede_ver_empresa(empresa_id)) with check (public.puede_ver_empresa(empresa_id));
+create policy horarios_quitar on public.horarios for delete to authenticated using (public.puede_ver_empresa(empresa_id));

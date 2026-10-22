@@ -156,7 +156,7 @@
     refrescarVistaActual();
   }
   function refrescarVistaActual() {
-    ({ tablero: pintarTablero, empleados: pintarEmpleados, empresas: pintarEmpresas, novedades: pintarNovedades, parametros: pintarParametros, asistencia: verAsistencia, usuarios: pintarUsuarios }[vistaActual] || (() => {}))();
+    ({ tablero: pintarTablero, horarios: pintarHorarios, empleados: pintarEmpleados, empresas: pintarEmpresas, novedades: pintarNovedades, parametros: pintarParametros, asistencia: verAsistencia, usuarios: pintarUsuarios }[vistaActual] || (() => {}))();
   }
   $$('.pestanas button, #subnav-admin button').forEach((b) => b.addEventListener('click', () => mostrarVista(b.dataset.vista)));
 
@@ -900,6 +900,153 @@
   $('#buscar-empleado').addEventListener('input', () => pintarEmpleados());
   $('#filtro-empleados').addEventListener('change', () => pintarEmpleados());
   $('#btn-nuevo-empleado').addEventListener('click', () => { if (!estado.empresaId) { aviso('Agrega primero una empresa.'); return; } editarEmpleado(null); });
+
+  // ------------------------------------------------------------------
+  // Horarios: lo que se programa a cada persona y la comparación con lo que marcó en el reloj
+  // ------------------------------------------------------------------
+  const TOLERANCIA_MIN = 10;   // minutos de gracia para llegada tarde o salida antes
+  const ESTADOS_HOR = [['trabaja', 'Trabaja'], ['descanso', 'Descanso (OFF)'], ['vacaciones', 'Vacaciones'], ['incapacidad', 'Incapacidad'], ['permiso', 'Permiso']];
+  let horModo = 'programar';
+  const lunesDe = (iso) => { const f = C.aFecha(iso); return C.isoDia(C.sumarDias(f, -((f.getUTCDay() + 6) % 7))); };
+  const hDec = (t) => (t ? +t.slice(0, 2) + +t.slice(3, 5) / 60 : null);
+  const durBloque = (a, b) => { if (!a || !b) return 0; let x = hDec(b) - hDec(a); if (x < 0) x += 24; return x; };
+  const horasProg = (h) => (h && h.estado === 'trabaja' ? durBloque(h.am_entrada, h.am_salida) + durBloque(h.pm_entrada, h.pm_salida) : 0);
+  const hm = (t) => (t ? t.slice(0, 5) : '');
+  const minDe = (txt) => +txt.slice(11, 13) * 60 + +txt.slice(14, 16);
+  const DIA_CORTO = ['dom', 'lun', 'mar', 'mié', 'jue', 'vie', 'sáb'];
+  const etiquetaDia = (iso) => `${DIA_CORTO[C.aFecha(iso).getUTCDay()]} ${+iso.slice(8)}`;
+
+  async function pintarHorarios() {
+    if (!$('#hor-semana').value) $('#hor-semana').value = lunesDe(hoyLocal());
+    const ini = lunesDe($('#hor-semana').value); $('#hor-semana').value = ini;
+    const dias = [...Array(7)].map((_, i) => C.isoDia(C.sumarDias(C.aFecha(ini), i)));
+    $('#hor-rango').textContent = `${fechaLarga(dias[0])} → ${fechaLarga(dias[6])}`;
+    $$('#hor-modos button').forEach((b) => b.classList.toggle('activa', b.dataset.modo === horModo));
+    $('#hor-copiar').hidden = horModo !== 'programar';
+    const cont = $('#horarios');
+    if (!estado.empresaId) { cont.innerHTML = '<div class="vacio"><h2>Elige una empresa</h2></div>'; return; }
+    const hs = await intentar(() => db.listar('horarios', { eq: { empresa_id: estado.empresaId }, gte: { fecha: dias[0] }, lte: { fecha: dias[6] } }));
+    if (!hs) return;
+    const mapa = new Map(hs.map((h) => [h.empleado_id + '|' + h.fecha, h]));
+    const emps = estado.empleados.filter((e) => e.activo !== false).sort((a, b) => (nombreProvisional(a) - nombreProvisional(b)) || nombreEmpleado(a).localeCompare(nombreEmpleado(b)));
+    const cabeza = `<thead><tr><th>Empleado</th>${dias.map((d) => `<th class="${C.esDominicalOFestivo(d) ? 'col-fest' : ''}">${etiquetaDia(d)}${C.nombreFestivo(d) ? ' · festivo' : ''}</th>`).join('')}<th class="num">Semana</th></tr></thead>`;
+
+    if (horModo === 'programar') {
+      const totalSemana = (e) => dias.reduce((s, d) => s + horasProg(mapa.get(e.id + '|' + d)), 0);
+      const programados = emps.filter((e) => dias.some((d) => mapa.has(e.id + '|' + d))).length;
+      cont.innerHTML = `<p class="nota">Toca una casilla para programar el turno de esa persona ese día. ${programados} de ${emps.length} personas tienen horario esta semana.</p>
+        <div class="tabla-envoltura"><table class="tabla tabla-horarios">${cabeza}<tbody>${emps.map((e) => `<tr><td>${esc(nombreEmpleado(e))}<span class="sub">Código ${esc(e.codigo_biometrico || '—')}</span></td>${dias.map((d) => {
+          const h = mapa.get(e.id + '|' + d);
+          let txt;
+          if (!h) txt = '<span class="tenue">—</span>';
+          else if (h.estado !== 'trabaja') txt = `<span class="chip">${esc((ESTADOS_HOR.find((x) => x[0] === h.estado) || [])[1] || h.estado)}</span>`;
+          else txt = [h.am_entrada && `${hm(h.am_entrada)}–${hm(h.am_salida)}`, h.pm_entrada && `${hm(h.pm_entrada)}–${hm(h.pm_salida)}`].filter(Boolean).join('<br>') + `<span class="sub">${h2(horasProg(h))} h${h.funcion ? ' · ' + esc(h.funcion) : ''}</span>`;
+          return `<td class="celda-hor" data-emp="${e.id}" data-fecha="${d}" tabindex="0" role="button" aria-label="Programar ${esc(nombreEmpleado(e))} el ${etiquetaDia(d)}">${txt}</td>`;
+        }).join('')}<td class="num"><b>${h2(totalSemana(e))} h</b></td></tr>`).join('') || '<tr><td colspan="9" class="tenue">No hay empleados activos.</td></tr>'}</tbody></table></div>`;
+      cont.querySelectorAll('.celda-hor').forEach((td) => {
+        const abrir = () => editarHorario(estado.empleados.find((x) => x.id === td.dataset.emp), td.dataset.fecha, mapa.get(td.dataset.emp + '|' + td.dataset.fecha), dias, mapa);
+        td.addEventListener('click', abrir);
+        td.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); abrir(); } });
+      });
+      return;
+    }
+
+    // Programado vs. laborado
+    const marc = await intentar(() => db.listar('marcaciones', { eq: { empresa_id: estado.empresaId, anulada: false }, gte: { fecha_hora: dias[0] }, lte: { fecha_hora: C.isoDia(C.sumarDias(C.aFecha(dias[6]), 1)) + ' 23:59:59' } }));
+    if (!marc) return;
+    const hoy = hoyLocal();
+    const tot = { prog: 0, lab: 0, tarde: 0, minTarde: 0, faltas: 0, sinProg: 0, antes: 0 };
+    const filas = emps.map((e) => {
+      const propias = marc.filter((m) => (m.empleado_id ? m.empleado_id === e.id : String(m.codigo_biometrico) === String(e.codigo_biometrico)));
+      const { turnos } = C.emparejarMarcaciones(propias);
+      let sp = 0, sl = 0;
+      const celdas = dias.map((d) => {
+        const h = mapa.get(e.id + '|' + d);
+        const ts = turnos.filter((t) => t.fecha === d);
+        const prog = horasProg(h), lab = ts.reduce((s, t) => s + t.minutos / 60, 0);
+        const marcas = propias.filter((m) => m.fecha_hora.slice(0, 10) === d).length;
+        sp += prog; sl += lab;
+        if (d > hoy) return { txt: prog ? `<span class="tenue">${h2(prog)} h prog.</span>` : '', cls: '' };
+        const chips = [];
+        if (prog > 0 && !ts.length && !marcas) { chips.push('<span class="chip chip-critico">Faltó</span>'); if (d < hoy) tot.faltas++; }
+        else if (prog > 0) {
+          const progIni = h.am_entrada || h.pm_entrada, progFin = h.pm_salida || h.am_salida;
+          const primera = ts.length ? ts[0].entrada : (propias.find((m) => m.fecha_hora.slice(0, 10) === d) || {}).fecha_hora;
+          if (primera && progIni) { const t = minDe(primera) - (hDec(progIni) * 60); if (t > TOLERANCIA_MIN) { chips.push(`<span class="chip chip-aviso">Tarde ${Math.round(t)} min</span>`); tot.tarde++; tot.minTarde += t; } }
+          const ultima = ts.length ? ts[ts.length - 1].salida : null;
+          if (ultima && progFin && ultima.slice(0, 10) === d) { const a = hDec(progFin) * 60 - minDe(ultima); if (a > TOLERANCIA_MIN && hDec(progFin) > hDec(progIni)) { chips.push(`<span class="chip chip-aviso">Salió ${Math.round(a)} min antes</span>`); tot.antes++; } }
+          if (!ts.length && marcas) chips.push('<span class="chip chip-aviso">Marcación incompleta</span>');
+        } else if (lab > 0 || marcas) { chips.push(`<span class="chip">${h && h.estado !== 'trabaja' ? 'Trabajó en ' + esc(h.estado) : 'Sin programar'}</span>`); tot.sinProg++; }
+        const dif = lab - prog;
+        return {
+          txt: `<span class="mono">${h2(prog)} / ${h2(lab)}</span>${prog || lab ? `<span class="sub ${dif < -0.25 ? 'neg' : dif > 0.25 ? 'pos' : ''}">${dif > 0 ? '+' : ''}${h2(dif)} h</span>` : ''}${chips.join(' ')}`,
+          cls: chips.some((c) => c.includes('critico')) ? 'celda-mal' : '',
+        };
+      });
+      tot.prog += sp; tot.lab += sl;
+      return { e, celdas, sp, sl };
+    }).filter((f) => f.sp > 0 || f.sl > 0);
+    cont.innerHTML = `
+      <div class="resumen">
+        <div class="cifra"><span class="eyebrow">Horas programadas</span><b>${h2(tot.prog)} h</b><small>semana completa</small></div>
+        <div class="cifra"><span class="eyebrow">Horas laboradas</span><b>${h2(tot.lab)} h</b><small>${tot.prog ? Math.round((tot.lab / tot.prog) * 100) + ' % de lo programado' : 'sin programación'}</small></div>
+        <div class="cifra"><span class="eyebrow">Llegadas tarde</span><b>${tot.tarde}</b><small>${tot.tarde ? `${Math.round(tot.minTarde / tot.tarde)} min en promedio · tolerancia ${TOLERANCIA_MIN} min` : `tolerancia ${TOLERANCIA_MIN} min`}</small></div>
+        <div class="cifra"><span class="eyebrow">Faltas y novedades</span><b>${tot.faltas}</b><small>${tot.sinProg} días trabajados sin programar · ${tot.antes} salidas antes</small></div>
+      </div>
+      <p class="nota">En cada día: horas programadas / horas laboradas según el reloj, y la diferencia.</p>
+      <div class="tabla-envoltura"><table class="tabla tabla-horarios">${cabeza}<tbody>${filas.map((f) => `<tr><td>${esc(nombreEmpleado(f.e))}<span class="sub">Código ${esc(f.e.codigo_biometrico || '—')}</span></td>${f.celdas.map((c) => `<td class="${c.cls}">${c.txt}</td>`).join('')}<td class="num"><b>${h2(f.sp)} / ${h2(f.sl)}</b></td></tr>`).join('')
+        || '<tr><td colspan="9" class="tenue">No hay horarios ni marcaciones esta semana. Programa los turnos en la pestaña Programación.</td></tr>'}</tbody></table></div>`;
+  }
+
+  function editarHorario(e, fecha, h, dias, mapa) {
+    const v = h ? { ...h, am_entrada: hm(h.am_entrada), am_salida: hm(h.am_salida), pm_entrada: hm(h.pm_entrada), pm_salida: hm(h.pm_salida) } : { estado: 'trabaja' };
+    abrirDialogo({
+      titulo: `${nombreEmpleado(e)} · ${fechaLarga(fecha)}`,
+      campos: [
+        { nombre: 'estado', etiqueta: 'Ese día', tipo: 'select', opciones: ESTADOS_HOR, ancho: true },
+        { nombre: 'am_entrada', etiqueta: 'Primer turno: entra', tipo: 'time' }, { nombre: 'am_salida', etiqueta: 'Primer turno: sale', tipo: 'time' },
+        { nombre: 'pm_entrada', etiqueta: 'Segundo turno: entra', tipo: 'time' }, { nombre: 'pm_salida', etiqueta: 'Segundo turno: sale', tipo: 'time' },
+        { nombre: 'funcion', etiqueta: 'Función o puesto (ej. Caja, Manga, Host)', ancho: true },
+        { nombre: 'repetir', etiqueta: 'Poner este mismo horario en los días de esta semana que aún no tienen', tipo: 'check', ancho: true },
+      ],
+      valores: v,
+      alGuardar: async (d) => {
+        const fila = { estado: d.estado || 'trabaja', am_entrada: d.am_entrada, am_salida: d.am_salida, pm_entrada: d.pm_entrada, pm_salida: d.pm_salida, funcion: d.funcion };
+        if (fila.estado === 'trabaja') {
+          if (!(fila.am_entrada && fila.am_salida) && !(fila.pm_entrada && fila.pm_salida)) throw new Error('Pon al menos un turno con hora de entrada y de salida, o elige Descanso.');
+          if ((fila.am_entrada && !fila.am_salida) || (!fila.am_entrada && fila.am_salida) || (fila.pm_entrada && !fila.pm_salida) || (!fila.pm_entrada && fila.pm_salida)) throw new Error('Cada turno necesita hora de entrada y de salida.');
+        } else Object.assign(fila, { am_entrada: null, am_salida: null, pm_entrada: null, pm_salida: null });
+        if (h) await db.actualizar('horarios', h.id, fila);
+        else await db.insertar('horarios', [{ ...fila, empresa_id: estado.empresaId, empleado_id: e.id, fecha }]);
+        if (d.repetir) {
+          const libres = dias.filter((x) => x !== fecha && !mapa.has(e.id + '|' + x));
+          if (libres.length) await db.insertar('horarios', libres.map((x) => ({ ...fila, empresa_id: estado.empresaId, empleado_id: e.id, fecha: x })));
+        }
+        aviso('Horario guardado'); pintarHorarios();
+      },
+      alEliminar: h ? async () => { await db.eliminar('horarios', h.id); aviso('Horario quitado'); pintarHorarios(); } : null,
+    });
+  }
+
+  const moverSemana = (n) => { $('#hor-semana').value = C.isoDia(C.sumarDias(C.aFecha(lunesDe($('#hor-semana').value || hoyLocal())), 7 * n)); pintarHorarios(); };
+  $('#hor-ant').addEventListener('click', () => moverSemana(-1));
+  $('#hor-sig').addEventListener('click', () => moverSemana(1));
+  $('#hor-semana').addEventListener('change', () => pintarHorarios());
+  $$('#hor-modos button').forEach((b) => b.addEventListener('click', () => { horModo = b.dataset.modo; pintarHorarios(); }));
+  $('#hor-copiar').addEventListener('click', () => intentar(async () => {
+    const ini = lunesDe($('#hor-semana').value || hoyLocal());
+    const antIni = C.isoDia(C.sumarDias(C.aFecha(ini), -7)), antFin = C.isoDia(C.sumarDias(C.aFecha(ini), -1)), fin = C.isoDia(C.sumarDias(C.aFecha(ini), 6));
+    const [ant, act] = await Promise.all([
+      db.listar('horarios', { eq: { empresa_id: estado.empresaId }, gte: { fecha: antIni }, lte: { fecha: antFin } }),
+      db.listar('horarios', { eq: { empresa_id: estado.empresaId }, gte: { fecha: ini }, lte: { fecha: fin } }),
+    ]);
+    if (!ant.length) { aviso('La semana anterior no tiene horarios para copiar.'); return; }
+    const ya = new Set(act.map((h) => h.empleado_id + '|' + h.fecha));
+    const nuevos = ant.map((h) => ({ empresa_id: h.empresa_id, empleado_id: h.empleado_id, fecha: C.isoDia(C.sumarDias(C.aFecha(h.fecha), 7)), estado: h.estado, am_entrada: h.am_entrada, am_salida: h.am_salida, pm_entrada: h.pm_entrada, pm_salida: h.pm_salida, funcion: h.funcion }))
+      .filter((h) => !ya.has(h.empleado_id + '|' + h.fecha));
+    if (nuevos.length) await db.insertar('horarios', nuevos);
+    aviso(`${nuevos.length} turnos copiados de la semana anterior`); pintarHorarios();
+  }));
 
   // ------------------------------------------------------------------
   // Empresas

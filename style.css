@@ -260,6 +260,22 @@ select:disabled { opacity: 1; background: transparent !important; border-color: 
 .encabezado-vista h2 small { font: 400 0.85rem var(--fuente); margin-left: 6px; }
 .oculto { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 
+/* Horarios */
+.tabla-horarios { font-size: 0.86rem; }
+.tabla-horarios th, .tabla-horarios td { padding: 8px 9px; }
+.tabla-horarios th { white-space: nowrap; }
+.tabla-horarios td { min-width: 96px; }
+#horarios { display: grid; gap: 14px; min-width: 0; }
+.tabla-horarios td:first-child { white-space: normal; min-width: 150px; }
+.tabla-horarios .col-fest { color: var(--aviso); }
+.celda-hor { cursor: pointer; }
+.celda-hor:hover, .celda-hor:focus-visible { background: var(--sello-suave); }
+.tabla-horarios .chip { margin-top: 3px; font-size: 0.72rem; padding: 2px 7px; }
+.tabla-horarios .sub.neg { color: var(--critico); }
+.tabla-horarios .sub.pos { color: var(--ok); }
+.tabla-horarios td.celda-mal { background: var(--critico-suave); }
+#hor-modos { margin-top: -4px; }
+
 /* ---------- 8. Usuarios, festivos, diálogo y aviso ---------- */
 .form-invitar { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
 .form-invitar .campo { flex: 1 1 200px; max-width: none; }
