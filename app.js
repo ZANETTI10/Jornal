@@ -26,6 +26,9 @@
   const empresaActual = () => estado.empresas.find((e) => e.id === estado.empresaId);
   const nombreEmpleado = (e) => (e ? `${e.nombres} ${e.apellidos || ''}`.trim() : 'Sin asignar');
 
+  // Fecha y hora de Colombia (UTC-5), sin depender de la zona del navegador
+  const buscable = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const hoyLocal = () => new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 10);
   function aviso(texto) {
     const el = $('#aviso'); el.textContent = texto; el.hidden = false;
     clearTimeout(aviso.t); aviso.t = setTimeout(() => { el.hidden = true; }, 3500);
@@ -336,6 +339,57 @@
       <span class="fila-num">${fmt(i.valor)} · ${Math.round((i.valor / total) * 100)} %</span></div>`).join('');
   };
 
+  // Panel "Hoy en vivo": quién está adentro y las últimas marcaciones que mandó el reloj. Se refresca cada minuto.
+  const horaLocal = (ms) => new Date(ms - 5 * 3600e3).toISOString().slice(0, 19).replace('T', ' ');
+  const msLocal = (txt) => Date.parse(String(txt).replace(' ', 'T') + '-05:00');
+  let vivoPeticion = 0;
+  async function pintarEnVivo() {
+    const cont = $('#en-vivo'); const emp = empresaActual();
+    if (!cont) return;
+    if (!emp || db.demo) { cont.hidden = true; return; }
+    const yo = ++vivoPeticion;
+    let marcas, relojes;
+    try {
+      [marcas, relojes] = await Promise.all([
+        db.listar('marcaciones', { eq: { empresa_id: emp.id }, gte: { fecha_hora: horaLocal(Date.now() - 16 * 3600e3) }, order: 'fecha_hora' }),
+        db.listar('dispositivos', { eq: { empresa_id: emp.id } }),
+      ]);
+    } catch (e) { return; }
+    if (yo !== vivoPeticion) return;
+    const conectados = relojes.filter((r) => r.activo && r.token_hash);
+    if (!conectados.length) { cont.hidden = true; return; }
+    const hoy = hoyLocal();
+    const validas = marcas.filter((m) => !m.anulada);
+    const porEmp = new Map(estado.empleados.map((e) => [e.id, e]));
+    const porCod = new Map(estado.empleados.map((e) => [String(e.codigo_biometrico), e]));
+    const quien = (m) => { const e = porEmp.get(m.empleado_id) || porCod.get(String(m.codigo_biometrico)); return e ? nombreEmpleado(e) : `Código ${m.codigo_biometrico}`; };
+    const personas = new Map();
+    validas.forEach((m) => { const k = m.empleado_id || m.codigo_biometrico; const p = personas.get(k) || { n: 0, ultima: null, primera: m }; p.n += 1; p.ultima = m; personas.set(k, p); });
+    const adentro = [...personas.values()].filter((p) => (p.ultima.tipo ? p.ultima.tipo === 'entrada' : p.n % 2 === 1) && Date.now() - msLocal(p.ultima.fecha_hora) < 14 * 3600e3)
+      .sort((a, b) => String(a.ultima.fecha_hora).localeCompare(String(b.ultima.fecha_hora)));
+    const deHoy = validas.filter((m) => String(m.fecha_hora).slice(0, 10) === hoy);
+    const ultimaRecibida = conectados.map((r) => r.ultimo_evento).filter(Boolean).sort().pop();
+    const contacto = conectados.map((r) => r.ultimo_contacto).filter(Boolean).sort().pop();
+    const minSinContacto = contacto ? (Date.now() - new Date(contacto).getTime()) / 60000 : Infinity;
+    const enLinea = minSinContacto < 120;
+    const hhmm = (t) => String(t).slice(11, 16);
+    cont.hidden = false;
+    cont.innerHTML = `<div class="panel en-vivo">
+      <div class="vivo-cabeza"><h3><span class="punto ${enLinea ? '' : 'punto-apagado'}" aria-hidden="true"></span>Hoy en vivo</h3>
+        <span class="nota">${esc(conectados.map((r) => r.nombre).join(', '))} · ${ultimaRecibida ? `última marcación ${hhmm(ultimaRecibida)} (${haceCuanto(new Date(msLocal(ultimaRecibida)).toISOString())})` : 'sin marcaciones todavía'}${enLinea ? '' : ' · <strong>el reloj no reporta hace rato: revisa el PC de la empresa</strong>'}</span></div>
+      <div class="vivo-cifras">
+        <div><b>${adentro.length}</b><span>adentro ahora</span></div>
+        <div><b>${new Set(deHoy.map((m) => m.empleado_id || m.codigo_biometrico)).size}</b><span>personas marcaron hoy</span></div>
+        <div><b>${deHoy.length}</b><span>marcaciones hoy</span></div>
+      </div>
+      <div class="vivo-listas">
+        <div><h4>Adentro ahora</h4>${adentro.length ? `<div class="vivo-personas">${adentro.map((p) => `<span class="chip">${esc(quien(p.ultima))} · desde ${hhmm(p.ultima.fecha_hora)}</span>`).join('')}</div>` : '<p class="nota">Nadie tiene una entrada abierta.</p>'}</div>
+        <div><h4>Últimas marcaciones</h4>${validas.length ? `<ol class="vivo-ultimas">${validas.slice(-6).reverse().map((m) => `<li><span class="mono">${hhmm(m.fecha_hora)}</span> ${esc(quien(m))}${m.tipo ? ` <span class="tenue">· ${m.tipo}</span>` : ''}</li>`).join('')}</ol>` : '<p class="nota">Todavía nadie ha marcado.</p>'}</div>
+      </div></div>`;
+  }
+  setInterval(() => { if (vistaActual === 'tablero' && !document.hidden) pintarEnVivo(); }, 60000);
+  document.addEventListener('visibilitychange', () => { if (!document.hidden && vistaActual === 'tablero') pintarEnVivo(); });
+
   let tableroPeticion = 0;
   async function pintarTablero() {
     const cont = $('#tablero');
@@ -343,6 +397,7 @@
     $('#tab-rango').textContent = r ? `${fechaLarga(r.inicio)} → ${fechaLarga(r.fin)}` : '—';
     if (!empresa) { cont.innerHTML = $('#liq-vacio').innerHTML; return; }
     const yo = ++tableroPeticion;
+    pintarEnVivo();
     cont.innerHTML = '<p class="nota" role="status">Calculando…</p>';
     const rAnt = periodoAnterior(r);
     const datos = await intentar(() => Promise.all([obtenerLiquidacion(empresa, r), obtenerLiquidacion(empresa, rAnt)]));
@@ -356,6 +411,7 @@
     const sinComparar = a.diasConDatos ? 'el periodo anterior está incompleto' : 'sin datos del periodo anterior';
     const d = (act, ant, menos) => (hayAnterior ? delta(act, ant, menos) : `<small class="tenue">${sinComparar}</small>`);
     const fichas = estado.empleados.filter((e) => String(e.documento).startsWith('ZK-')).length;
+    const sinMarcas = E.filter((e) => !e.detalleDias.length);
     const cerrado = res.periodo && res.periodo.estado === 'cerrado';
     const extras = (e) => EXT.reduce((s, c) => s + e.horas[c], 0);
     const vExtras = (e) => EXT.reduce((s, c) => s + e.valores[c], 0);
@@ -401,13 +457,14 @@
       m.sobreSemana.length && `<div class="alerta alerta-critica"><strong>${m.sobreSemana.length}</strong> ${m.sobreSemana.length === 1 ? 'persona superó' : 'personas superaron'} las ${TOPE_EXTRA_SEMANA} horas extra en una semana, el máximo legal: ${lista(m.sobreSemana)}.</div>`,
       m.diasSobreTope && `<div class="alerta"><strong>${m.diasSobreTope}</strong> jornadas con más de ${TOPE_EXTRA_DIA} horas extra en el día (${m.sobreDia.length} personas): ${lista(m.sobreDia)}.</div>`,
       m.porRevisar && `<div class="alerta"><strong>${m.porRevisar}</strong> marcaciones sin pareja. Mientras no se corrijan, esas horas no se pagan. <button class="btn btn-mini" data-ir="asistencia" type="button">Revisar en Asistencia</button></div>`,
+      sinMarcas.length && `<div class="alerta alerta-critica"><strong>${sinMarcas.length}</strong> ${sinMarcas.length === 1 ? 'empleado no marcó' : 'empleados no marcaron'} ni una vez en el periodo, pero se les liquida el salario completo: ${lista(sinMarcas.map((e) => e.nombre))}. Si ya no trabajan, ponles fecha de retiro. <button class="btn btn-mini" data-ir="empleados" type="button">Ir a Empleados</button></div>`,
       fichas && `<div class="alerta"><strong>${fichas}</strong> empleados con ficha incompleta: las cifras en pesos usan el salario mínimo provisional. <button class="btn btn-mini" data-ir="empleados" type="button">Completar fichas</button></div>`,
     ].filter(Boolean).join('') || '<p class="nota">Sin alertas en este periodo.</p>';
 
     cont.innerHTML = `
       <div class="tablero-cabecera"><div><span class="eyebrow">${esc(empresa.nombre)}</span>
         <h2>${fechaLarga(r.inicio)} a ${fechaLarga(r.fin)}</h2></div>
-        ${cerrado ? '<span class="chip chip-ok">Periodo cerrado</span>' : '<span class="chip">Periodo en curso · cifras estimadas</span>'}</div>
+        ${cerrado ? '<span class="chip chip-ok">Periodo cerrado</span>' : r.fin < hoyLocal() ? '<span class="chip chip-aviso">Periodo terminado, sin cerrar</span>' : '<span class="chip">Periodo en curso · cifras estimadas</span>'}</div>
       <div class="resumen">
         <div class="cifra destacada"><span class="eyebrow">Costo laboral total</span><b>${$f(m.costo)}</b>${d(m.costo, a.costo, true)}</div>
         <div class="cifra"><span class="eyebrow">Neto a pagar</span><b>${$f(m.neto)}</b><small>${m.personas} empleados</small></div>
@@ -493,7 +550,7 @@
         <td class="num">${$f(e.totalDevengado)}</td>
         <td class="num">${$f(e.totalDeducciones)}</td>
         <td class="num"><strong>${$f(e.neto)}</strong></td>
-        <td>${e.inconsistencias.length ? `<span class="chip chip-aviso">${e.inconsistencias.length} por revisar</span>` : '<span class="chip chip-ok">OK</span>'}</td>
+        <td>${!e.detalleDias.length ? '<span class="chip chip-critico">Sin marcaciones</span>' : e.inconsistencias.length ? `<span class="chip chip-aviso">${e.inconsistencias.length} por revisar</span>` : '<span class="chip chip-ok">OK</span>'}</td>
       </tr>`;
     }).join('');
     const t = $('#tabla-liq'); t.hidden = false;
@@ -799,9 +856,15 @@
   function pintarEmpleados() {
     const t = $('#tabla-empleados');
     if (!estado.empresaId) { t.innerHTML = '<tbody><tr><td class="tenue">Agrega primero una empresa.</td></tr></tbody>'; return; }
+    const q = buscable($('#buscar-empleado') ? $('#buscar-empleado').value : '');
+    const lista = estado.empleados
+      .filter((e) => !q || buscable(`${nombreEmpleado(e)} ${e.documento} ${e.codigo_biometrico || ''} ${e.cargo || ''}`).includes(q))
+      .sort((a, b) => (nombreProvisional(a) - nombreProvisional(b)) || (a.activo === false) - (b.activo === false)
+        || (nombreProvisional(a) ? (+a.codigo_biometrico || 0) - (+b.codigo_biometrico || 0) : nombreEmpleado(a).localeCompare(nombreEmpleado(b))));
+    $('#cuenta-empleados').textContent = `${lista.length} de ${estado.empleados.length}`;
     t.innerHTML = `<thead><tr><th>Empleado</th><th>Cédula</th><th class="num">Salario</th><th>Ingreso</th><th>Código reloj</th><th>Estado</th></tr></thead><tbody>${
-      estado.empleados.map((e) => `<tr class="clic" data-id="${e.id}"><td>${esc(nombreEmpleado(e))}<span class="sub">${esc(e.cargo || '')}</span></td><td class="mono">${esc(e.documento)}</td><td class="num">${$f(e.salario)}${e.tipo_salario === 'integral' ? '<span class="sub">integral</span>' : ''}</td><td class="mono">${esc(e.fecha_ingreso)}</td><td class="mono">${esc(e.codigo_biometrico || '—')}</td><td>${String(e.documento).startsWith('ZK-') ? '<span class="chip chip-aviso">Completar ficha</span>' : e.activo === false ? '<span class="chip">Retirado</span>' : '<span class="chip chip-ok">Activo</span>'}</td></tr>`).join('')
-      || '<tr><td colspan="6" class="tenue">Esta empresa no tiene empleados todavía.</td></tr>'}</tbody>`;
+      lista.map((e) => `<tr class="clic" data-id="${e.id}"><td>${esc(nombreEmpleado(e))}<span class="sub">${esc(e.cargo || '')}</span></td><td class="mono">${esc(e.documento)}</td><td class="num">${$f(e.salario)}${e.tipo_salario === 'integral' ? '<span class="sub">integral</span>' : ''}</td><td class="mono">${esc(e.fecha_ingreso)}</td><td class="mono">${esc(e.codigo_biometrico || '—')}</td><td>${e.activo === false ? '<span class="chip">Retirado</span>' : nombreProvisional(e) ? '<span class="chip chip-aviso">Sin nombre</span>' : String(e.documento).startsWith('ZK-') ? '<span class="chip chip-aviso">Completar ficha</span>' : '<span class="chip chip-ok">Activo</span>'}</td></tr>`).join('')
+      || `<tr><td colspan="6" class="tenue">${q ? 'Nadie coincide con la búsqueda.' : 'Esta empresa no tiene empleados todavía.'}</td></tr>`}</tbody>`;
     t.querySelectorAll('tr.clic').forEach((tr) => tr.addEventListener('click', () => editarEmpleado(estado.empleados.find((e) => e.id === tr.dataset.id))));
   }
   function editarEmpleado(emp) {
@@ -817,6 +880,7 @@
       alEliminar: emp ? async () => { await db.eliminar('empleados', emp.id); aviso('Empleado eliminado'); await cargarEmpleados(); pintarEmpleados(); invalidarDatos(); } : null,
     });
   }
+  $('#buscar-empleado').addEventListener('input', () => pintarEmpleados());
   $('#btn-nuevo-empleado').addEventListener('click', () => { if (!estado.empresaId) { aviso('Agrega primero una empresa.'); return; } editarEmpleado(null); });
 
   // ------------------------------------------------------------------

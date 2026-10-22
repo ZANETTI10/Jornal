@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#111823">
 <title>Jornal</title>
 <link rel="preload" href="sora.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="style.css?v=20261014c">
+<link rel="stylesheet" href="style.css?v=20261022a">
 </head>
 <body>
 <!--CUERPO-->
@@ -78,6 +78,7 @@
           <select id="tab-tramo"><option value="q1">1ª quincena</option><option value="q2">2ª quincena</option><option value="mes">Mes completo</option></select></div>
         <div class="campo campo-rango"><span class="eyebrow">Fechas</span><span id="tab-rango" class="mono"></span></div>
       </div>
+      <div id="en-vivo" hidden></div>
       <div id="tablero" class="tablero"></div>
     </section>
 
@@ -136,7 +137,9 @@
 
     <!-- EMPLEADOS -->
     <section id="vista-empleados" class="vista" hidden>
-      <div class="encabezado-vista"><h2>Empleados</h2><button id="btn-nuevo-empleado" class="btn btn-primario" type="button">Agregar empleado</button></div>
+      <div class="encabezado-vista"><h2>Empleados <small id="cuenta-empleados" class="tenue"></small></h2>
+        <div class="buscador"><label for="buscar-empleado" class="oculto">Buscar empleado</label><input id="buscar-empleado" type="search" placeholder="Buscar por nombre, cédula o código" autocomplete="off"></div>
+        <button id="btn-nuevo-empleado" class="btn btn-primario" type="button">Agregar empleado</button></div>
       <div class="tabla-envoltura"><table id="tabla-empleados" class="tabla"></table></div>
     </section>
 
@@ -199,9 +202,9 @@
 <!--/CUERPO-->
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-<script src="config.js?v=20261014c"></script>
-<script src="calculo.js?v=20261014c"></script>
-<script src="datos.js?v=20261014c"></script>
-<script src="app.js?v=20261014c"></script>
+<script src="config.js?v=20261022a"></script>
+<script src="calculo.js?v=20261022a"></script>
+<script src="datos.js?v=20261022a"></script>
+<script src="app.js?v=20261022a"></script>
 </body>
 </html>

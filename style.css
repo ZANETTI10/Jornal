@@ -238,6 +238,26 @@ select:disabled { opacity: 1; background: transparent !important; border-color: 
 .mas-detalle > .tablero-grid { padding: 0 18px 18px; }
 .mas-detalle .panel { border: 0; padding: 0; }
 
+/* Hoy en vivo */
+.en-vivo { gap: 14px; }
+.vivo-cabeza { display: flex; justify-content: space-between; align-items: baseline; gap: 6px 16px; flex-wrap: wrap; }
+.vivo-cabeza h3 { display: flex; align-items: center; gap: 10px; }
+.punto { width: 10px; height: 10px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 0 rgba(98, 214, 156, 0.6); animation: latido 2s infinite; }
+.punto-apagado { background: var(--critico); animation: none; }
+@keyframes latido { 0% { box-shadow: 0 0 0 0 rgba(98, 214, 156, 0.55); } 70% { box-shadow: 0 0 0 9px rgba(98, 214, 156, 0); } 100% { box-shadow: 0 0 0 0 rgba(98, 214, 156, 0); } }
+.vivo-cifras { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.vivo-cifras div { background: var(--superficie-2); border-radius: var(--r-s); padding: 10px 14px; display: grid; }
+.vivo-cifras b { font: 600 1.5rem/1.2 var(--fuente-titulo); }
+.vivo-cifras span { color: var(--tinta-suave); font-size: 0.84rem; }
+.vivo-listas { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; }
+.vivo-listas h4 { margin: 0 0 8px; font-size: 0.86rem; color: var(--tinta-suave); font-weight: 600; }
+.vivo-personas { display: flex; flex-wrap: wrap; gap: 6px; }
+.vivo-ultimas { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 0.92rem; }
+.vivo-ultimas .mono { color: var(--sello-fuerte); margin-right: 6px; }
+.buscador { flex: 1 1 240px; max-width: 380px; margin-left: auto; }
+.encabezado-vista h2 small { font: 400 0.85rem var(--fuente); margin-left: 6px; }
+.oculto { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+
 /* ---------- 8. Usuarios, festivos, diálogo y aviso ---------- */
 .form-invitar { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
 .form-invitar .campo { flex: 1 1 200px; max-width: none; }
