@@ -443,7 +443,7 @@
     const composicion = barras([
       { nombre: 'Salarios y auxilios', valor: Math.max(0, m.devengado - m.vRec - m.vExtra) },
       { nombre: 'Recargos nocturnos y dominicales', valor: m.vRec },
-      { nombre: 'Horas extra', valor: m.vExtra },
+      { nombre: empresa.extras_en_tiempo ? 'Recargos de horas extra (la hora se compensa en tiempo)' : 'Horas extra', valor: m.vExtra },
       { nombre: 'Seguridad social y parafiscales', valor: m.aportes },
       { nombre: 'Prestaciones (provisión)', valor: m.provisiones },
     ], $f);
@@ -470,7 +470,7 @@
       <div class="resumen">
         <div class="cifra destacada"><span class="eyebrow">Costo laboral total</span><b>${$f(m.costo)}</b>${d(m.costo, a.costo, true)}</div>
         <div class="cifra"><span class="eyebrow">Neto a pagar</span><b>${$f(m.neto)}</b><small>${m.personas} empleados</small></div>
-        <div class="cifra"><span class="eyebrow">Horas extra</span><b>${h2(m.hExtra)} h</b><small>${$f(m.vExtra)} · ${m.horas ? Math.round((m.hExtra / m.horas) * 100) : 0} % de las horas</small></div>
+        <div class="cifra"><span class="eyebrow">Horas extra${empresa.extras_en_tiempo ? ' · se compensan en tiempo' : ''}</span><b>${h2(m.hExtra)} h</b><small>${empresa.extras_en_tiempo ? `no se pagan en dinero · recargos ${$f(m.vExtra)}` : `${$f(m.vExtra)} · ${m.horas ? Math.round((m.hExtra / m.horas) * 100) : 0} % de las horas`}</small></div>
         <div class="cifra"><span class="eyebrow">Asistencia estimada</span><b>${Math.round(m.asistencia * 100)} %</b><small>${m.conMarcas} de ${m.personas} personas marcaron</small></div>
       </div>
       <div class="panel"><h3>Para revisar</h3><div class="alertas">${alertas}</div></div>
@@ -638,7 +638,19 @@
       Empleado: e.nombre, Fecha: d.fecha, Festivo: d.festivo || (d.dominical ? 'Domingo' : ''), Turnos: d.turnos.join(', '),
       ...Object.fromEntries(Object.keys(C.CONCEPTOS).map((c) => [c, d.horas[c] || 0])), 'Valor adicional': d.valor,
     })));
+    const enTiempo = !!empresaActual()?.extras_en_tiempo;
+    const reporteExtras = L.empleados.map((e) => {
+      const tot = e.horas.HED + e.horas.HEN + e.horas.HEDDF + e.horas.HENDF;
+      return {
+        Empleado: e.nombre, Código: e.codigo_biometrico || '', 'Extra diurna (h)': e.horas.HED, 'Extra nocturna (h)': e.horas.HEN,
+        'Extra diurna dom/fest (h)': e.horas.HEDDF, 'Extra nocturna dom/fest (h)': e.horas.HENDF, 'Total horas extra': Math.round(tot * 100) / 100,
+        'Días con más de 2 h extra': e.detalleDias.filter((d) => (d.horas.HED || 0) + (d.horas.HEN || 0) + (d.horas.HEDDF || 0) + (d.horas.HENDF || 0) > 2.01).length,
+        [enTiempo ? 'Horas a compensar en tiempo' : 'Horas pagadas']: Math.round(tot * 100) / 100,
+        [enTiempo ? 'Recargos pagados de esas horas' : 'Valor pagado']: e.valores.HED + e.valores.HEN + e.valores.HEDDF + e.valores.HENDF,
+      };
+    }).filter((x) => x['Total horas extra'] > 0).sort((a, b) => b['Total horas extra'] - a['Total horas extra']);
     const libro = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(libro, XLSX.utils.json_to_sheet(reporteExtras.length ? reporteExtras : [{ Empleado: 'Sin horas extra en el periodo' }]), 'Horas extra');
     XLSX.utils.book_append_sheet(libro, XLSX.utils.json_to_sheet(resumen), 'Resumen');
     XLSX.utils.book_append_sheet(libro, XLSX.utils.json_to_sheet(conceptos), 'Conceptos');
     XLSX.utils.book_append_sheet(libro, XLSX.utils.json_to_sheet(diario), 'Día a día');
@@ -898,6 +910,7 @@
     { nombre: 'nit', etiqueta: 'NIT' }, { nombre: 'ciudad', etiqueta: 'Ciudad' },
     { nombre: 'periodicidad', etiqueta: 'Periodicidad de pago', tipo: 'select', opciones: [['quincenal', 'Quincenal'], ['mensual', 'Mensual']] },
     { nombre: 'exonerada_aportes', etiqueta: 'Exonerada de salud empleador, SENA e ICBF (art. 114-1 E.T.)', tipo: 'check', defecto: true, ancho: true },
+    { nombre: 'extras_en_tiempo', etiqueta: 'Las horas extra se compensan con tiempo: no se pagan en dinero; solo se pagan sus recargos nocturno (35 %) y dominical/festivo', tipo: 'check', defecto: false, ancho: true },
   ];
   function pintarEmpresas() {
     const t = $('#tabla-empresas');

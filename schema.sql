@@ -581,3 +581,9 @@ begin
 end $$;
 create or replace trigger trg_nombre_al_reloj after update of nombres, apellidos on public.empleados
   for each row execute function public.nombre_al_reloj();
+
+-- 14. Empleados en nómina o solo asistencia (2026-10-22)
+alter table public.empleados add column if not exists en_nomina boolean not null default true;
+
+-- 15. Horas extra compensadas en tiempo (2026-10-22)
+alter table public.empresas add column if not exists extras_en_tiempo boolean not null default false;

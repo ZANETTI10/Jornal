@@ -282,6 +282,7 @@
   //   HED  extra diurna                HEN  extra nocturna
   //   HEDDF extra diurna dom/fest      HENDF extra nocturna dom/fest
   // ------------------------------------------------------------------
+  const EXTRAS_C = ['HED', 'HEN', 'HEDDF', 'HENDF'];
   const CONCEPTOS = {
     ORD:   { nombre: 'Horas ordinarias diurnas', corto: 'Ord.' },
     RN:    { nombre: 'Recargo nocturno', corto: 'RN' },
@@ -292,8 +293,18 @@
     HEDDF: { nombre: 'Hora extra diurna dominical/festiva', corto: 'HEDDF' },
     HENDF: { nombre: 'Hora extra nocturna dominical/festiva', corto: 'HENDF' },
   };
-  // Factor que se paga ADEMÁS del salario por cada hora del concepto
-  function factorConcepto(c, p) {
+  // Factor que se paga ADEMÁS del salario por cada hora del concepto.
+  // extrasEnTiempo: la empresa compensa las horas extra con tiempo libre; de esas horas
+  // solo se pagan los recargos (nocturno y dominical/festivo), no la hora ni el 25 %/75 %.
+  function factorConcepto(c, p, extrasEnTiempo) {
+    if (extrasEnTiempo) {
+      switch (c) {
+        case 'HED': return 0;
+        case 'HEN': return p.recargo_nocturno;
+        case 'HEDDF': return p.recargo_dominical;
+        case 'HENDF': return p.recargo_nocturno + p.recargo_dominical;
+      }
+    }
     switch (c) {
       case 'ORD': return 0;
       case 'RN': return p.recargo_nocturno;
@@ -309,7 +320,7 @@
   // Horas mensuales para el valor de la hora: jornada semanal × 30/6
   const horasMes = (p) => p.jornada_semanal * 5;
 
-  function clasificarTurnos(turnos, empleado, parametros) {
+  function clasificarTurnos(turnos, empleado, parametros, extrasEnTiempo = false) {
     const porDia = {};                 // fecha → { minutos por concepto, valor }
     const minutosPorFecha = {};        // minutos trabajados acumulados por día del turno
     const salario = +empleado.salario;
@@ -344,7 +355,7 @@
         horas[c] += 1 / 60;
         if (!integral) {
           // el valor de la hora depende de la jornada vigente ese día (44 h → 220 h/mes, 42 h → 210 h/mes)
-          const v = (salario / horasMes(pm) / 60) * factorConcepto(c, pm);
+          const v = (salario / horasMes(pm) / 60) * factorConcepto(c, pm, extrasEnTiempo);
           dia.valor += v;
           valores[c] += v;
         }
@@ -410,7 +421,8 @@
     const enPeriodo = (f) => f >= desde && f <= hasta;
     const turnos = emp.turnos.filter((t) => enPeriodo(t.fecha));
     const inconsistencias = emp.inconsistencias.filter((x) => enPeriodo(x.fecha));
-    const horas = clasificarTurnos(turnos, empleado, parametros);
+    const extrasEnTiempo = !!(empresa && empresa.extras_en_tiempo);
+    const horas = clasificarTurnos(turnos, empleado, parametros, extrasEnTiempo);
 
     const salarioDia = salario / 30;
     const basico = redondear(salarioDia * diasSalario);
@@ -425,7 +437,10 @@
 
     const devengos = [
       { concepto: `Salario básico (${diasSalario} días)`, valor: basico },
-      ...Object.entries(horas.valores).filter(([, v]) => v > 0).map(([c, v]) => ({ concepto: `${CONCEPTOS[c].nombre} (${horas.horas[c]} h)`, valor: v })),
+      ...Object.entries(horas.valores).filter(([, v]) => v > 0).map(([c, v]) => ({
+        concepto: extrasEnTiempo && EXTRAS_C.includes(c)
+          ? `Recargo de ${CONCEPTOS[c].nombre.toLowerCase()} (${horas.horas[c]} h; la hora se compensa en tiempo)`
+          : `${CONCEPTOS[c].nombre} (${horas.horas[c]} h)`, valor: v })),
       vacaciones && { concepto: `Vacaciones (${diasVacaciones} días)`, valor: vacaciones },
       incapacidad && { concepto: `Incapacidad (${diasIncapacidad} días)`, valor: incapacidad },
       auxilio && { concepto: 'Auxilio de transporte', valor: auxilio },
@@ -479,7 +494,7 @@
 
     return {
       empleado_id: empleado.id,
-      documento: empleado.documento,
+      documento: empleado.documento, codigo_biometrico: empleado.codigo_biometrico,
       nombre: `${empleado.nombres} ${empleado.apellidos || ''}`.trim(),
       cargo: empleado.cargo || '',
       salario,
