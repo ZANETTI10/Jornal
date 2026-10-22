@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#111823">
 <title>Jornal</title>
 <link rel="preload" href="sora.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="style.css?v=20261022d">
+<link rel="stylesheet" href="style.css?v=20261022e">
 </head>
 <body>
 <!--CUERPO-->
@@ -150,6 +150,7 @@
       <div class="controles">
         <div class="campo"><label for="hor-semana">Semana del</label><input id="hor-semana" type="date"></div>
         <div class="campo campo-rango"><span class="eyebrow">Fechas</span><span id="hor-rango" class="mono"></span></div>
+        <div class="campo"><label for="hor-area">Área</label><select id="hor-area"><option value="">Todas las áreas</option></select></div>
         <div class="acciones">
           <button id="hor-ant" class="btn" type="button">Semana anterior</button>
           <button id="hor-sig" class="btn" type="button">Semana siguiente</button>
@@ -158,7 +159,9 @@
       </div>
       <div id="hor-modos" class="subnav" aria-label="Horarios">
         <button type="button" data-modo="programar" class="activa">Programación</button>
-        <button type="button" data-modo="comparar">Programado vs. laborado</button>
+        <span class="subnav-etiqueta">Programado vs. laborado:</span>
+        <button type="button" data-modo="comparar">Por persona</button>
+        <button type="button" data-modo="areas">Por área (diario)</button>
       </div>
       <div id="horarios"></div>
     </section>
@@ -222,9 +225,9 @@
 <!--/CUERPO-->
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-<script src="config.js?v=20261022d"></script>
-<script src="calculo.js?v=20261022d"></script>
-<script src="datos.js?v=20261022d"></script>
-<script src="app.js?v=20261022d"></script>
+<script src="config.js?v=20261022e"></script>
+<script src="calculo.js?v=20261022e"></script>
+<script src="datos.js?v=20261022e"></script>
+<script src="app.js?v=20261022e"></script>
 </body>
 </html>

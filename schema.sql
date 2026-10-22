@@ -607,3 +607,7 @@ create policy horarios_ver on public.horarios for select to authenticated using 
 create policy horarios_editar on public.horarios for insert to authenticated with check (public.puede_ver_empresa(empresa_id));
 create policy horarios_cambiar on public.horarios for update to authenticated using (public.puede_ver_empresa(empresa_id)) with check (public.puede_ver_empresa(empresa_id));
 create policy horarios_quitar on public.horarios for delete to authenticated using (public.puede_ver_empresa(empresa_id));
+
+-- 17. Áreas (cocina, servicio, host…) por empleado y por día de horario (2026-10-22)
+alter table public.empleados add column if not exists area text;
+alter table public.horarios add column if not exists area text;

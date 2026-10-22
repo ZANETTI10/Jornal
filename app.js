@@ -28,6 +28,7 @@
 
   // Fecha y hora de Colombia (UTC-5), sin depender de la zona del navegador
   const buscable = (t) => String(t || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const AREAS_BASE = ['Cocina', 'Servicio', 'Host', 'Mantenimiento', 'Barra café', 'Preproducción', 'Barra bar'];
   const hoyLocal = () => new Date(Date.now() - 5 * 3600e3).toISOString().slice(0, 10);
   function aviso(texto) {
     const el = $('#aviso'); el.textContent = texto; el.hidden = false;
@@ -855,6 +856,7 @@
     { nombre: 'apellidos', etiqueta: 'Apellidos' },
     { nombre: 'documento', etiqueta: 'Cédula', requerido: true },
     { nombre: 'cargo', etiqueta: 'Cargo' },
+    { nombre: 'area', etiqueta: 'Área', tipo: 'select', opciones: [['', 'Sin área'], ...AREAS_BASE.map((a) => [a, a])] },
     { nombre: 'salario', etiqueta: 'Salario mensual', tipo: 'number', requerido: true, paso: '1' },
     { nombre: 'tipo_salario', etiqueta: 'Tipo de salario', tipo: 'select', opciones: [['ordinario', 'Ordinario'], ['integral', 'Integral']] },
     { nombre: 'tipo_contrato', etiqueta: 'Contrato', tipo: 'select', opciones: [['indefinido', 'Término indefinido'], ['fijo', 'Término fijo'], ['obra_labor', 'Obra o labor'], ['aprendizaje', 'Aprendizaje']] },
@@ -904,6 +906,8 @@
   // ------------------------------------------------------------------
   // Horarios: lo que se programa a cada persona y la comparación con lo que marcó en el reloj
   // ------------------------------------------------------------------
+  const areasEmpresa = () => [...new Set([...AREAS_BASE, ...estado.empleados.map((e) => e.area).filter(Boolean)])];
+  const areaDe = (e, h) => (h && h.area) || e.area || 'Sin área';
   const TOLERANCIA_MIN = 10;   // minutos de gracia para llegada tarde o salida antes
   const ESTADOS_HOR = [['trabaja', 'Trabaja'], ['descanso', 'Descanso (OFF)'], ['vacaciones', 'Vacaciones'], ['incapacidad', 'Incapacidad'], ['permiso', 'Permiso']];
   let horModo = 'programar';
@@ -928,21 +932,32 @@
     const hs = await intentar(() => db.listar('horarios', { eq: { empresa_id: estado.empresaId }, gte: { fecha: dias[0] }, lte: { fecha: dias[6] } }));
     if (!hs) return;
     const mapa = new Map(hs.map((h) => [h.empleado_id + '|' + h.fecha, h]));
-    const emps = estado.empleados.filter((e) => e.activo !== false).sort((a, b) => (nombreProvisional(a) - nombreProvisional(b)) || nombreEmpleado(a).localeCompare(nombreEmpleado(b)));
+    const areas = areasEmpresa();
+    const selArea = $('#hor-area'); const areaSel = selArea.value;
+    selArea.innerHTML = `<option value="">Todas las áreas</option>${areas.map((a) => `<option ${a === areaSel ? 'selected' : ''}>${esc(a)}</option>`).join('')}<option value="Sin área" ${areaSel === 'Sin área' ? 'selected' : ''}>Sin área</option>`;
+    const ordenArea = (a) => { const i = areas.indexOf(a); return i < 0 ? 99 : i; };
+    const emps = estado.empleados.filter((e) => e.activo !== false && (!areaSel || (e.area || 'Sin área') === areaSel))
+      .sort((a, b) => ordenArea(a.area || 'Sin área') - ordenArea(b.area || 'Sin área') || (nombreProvisional(a) - nombreProvisional(b)) || nombreEmpleado(a).localeCompare(nombreEmpleado(b)));
+    const filasConGrupo = (lista, fila, cols) => { let g = null; return lista.map((x) => { const e = x.e || x; const a = e.area || 'Sin área'; const head = a !== g ? `<tr class="fila-grupo"><td colspan="${cols}">${esc(a)}</td></tr>` : ''; g = a; return head + fila(x); }).join(''); };
     const cabeza = `<thead><tr><th>Empleado</th>${dias.map((d) => `<th class="${C.esDominicalOFestivo(d) ? 'col-fest' : ''}">${etiquetaDia(d)}${C.nombreFestivo(d) ? ' · festivo' : ''}</th>`).join('')}<th class="num">Semana</th></tr></thead>`;
 
     if (horModo === 'programar') {
       const totalSemana = (e) => dias.reduce((s, d) => s + horasProg(mapa.get(e.id + '|' + d)), 0);
       const programados = emps.filter((e) => dias.some((d) => mapa.has(e.id + '|' + d))).length;
       cont.innerHTML = `<p class="nota">Toca una casilla para programar el turno de esa persona ese día. ${programados} de ${emps.length} personas tienen horario esta semana.</p>
-        <div class="tabla-envoltura"><table class="tabla tabla-horarios">${cabeza}<tbody>${emps.map((e) => `<tr><td>${esc(nombreEmpleado(e))}<span class="sub">Código ${esc(e.codigo_biometrico || '—')}</span></td>${dias.map((d) => {
+        <div class="tabla-envoltura"><table class="tabla tabla-horarios">${cabeza}<tbody>${filasConGrupo(emps, (e) => `<tr><td>${esc(nombreEmpleado(e))}<span class="sub">Código ${esc(e.codigo_biometrico || '—')}</span><select class="sel-area" data-area-emp="${e.id}" aria-label="Área de ${esc(nombreEmpleado(e))}"><option value="">Sin área</option>${areas.map((a) => `<option ${a === e.area ? 'selected' : ''}>${esc(a)}</option>`).join('')}</select></td>${dias.map((d) => {
           const h = mapa.get(e.id + '|' + d);
           let txt;
           if (!h) txt = '<span class="tenue">—</span>';
           else if (h.estado !== 'trabaja') txt = `<span class="chip">${esc((ESTADOS_HOR.find((x) => x[0] === h.estado) || [])[1] || h.estado)}</span>`;
-          else txt = [h.am_entrada && `${hm(h.am_entrada)}–${hm(h.am_salida)}`, h.pm_entrada && `${hm(h.pm_entrada)}–${hm(h.pm_salida)}`].filter(Boolean).join('<br>') + `<span class="sub">${h2(horasProg(h))} h${h.funcion ? ' · ' + esc(h.funcion) : ''}</span>`;
+          else txt = [h.am_entrada && `${hm(h.am_entrada)}–${hm(h.am_salida)}`, h.pm_entrada && `${hm(h.pm_entrada)}–${hm(h.pm_salida)}`].filter(Boolean).join('<br>') + `<span class="sub">${h2(horasProg(h))} h${h.funcion ? ' · ' + esc(h.funcion) : ''}${h.area && h.area !== e.area ? ' · ' + esc(h.area) : ''}</span>`;
           return `<td class="celda-hor" data-emp="${e.id}" data-fecha="${d}" tabindex="0" role="button" aria-label="Programar ${esc(nombreEmpleado(e))} el ${etiquetaDia(d)}">${txt}</td>`;
-        }).join('')}<td class="num"><b>${h2(totalSemana(e))} h</b></td></tr>`).join('') || '<tr><td colspan="9" class="tenue">No hay empleados activos.</td></tr>'}</tbody></table></div>`;
+        }).join('')}<td class="num"><b>${h2(totalSemana(e))} h</b></td></tr>`, 9) || '<tr><td colspan="9" class="tenue">No hay empleados en esta área.</td></tr>'}</tbody></table></div>`;
+      cont.querySelectorAll('[data-area-emp]').forEach((sel) => sel.addEventListener('change', () => intentar(async () => {
+        const e = estado.empleados.find((x) => x.id === sel.dataset.areaEmp);
+        await db.actualizar('empleados', e.id, { area: sel.value || null }); e.area = sel.value || null;
+        aviso(`${nombreEmpleado(e)} quedó en ${sel.value || 'Sin área'}`);
+      })));
       cont.querySelectorAll('.celda-hor').forEach((td) => {
         const abrir = () => editarHorario(estado.empleados.find((x) => x.id === td.dataset.emp), td.dataset.fecha, mapa.get(td.dataset.emp + '|' + td.dataset.fecha), dias, mapa);
         td.addEventListener('click', abrir);
@@ -951,11 +966,12 @@
       return;
     }
 
-    // Programado vs. laborado
+    // Programado vs. laborado (por persona o por área)
     const marc = await intentar(() => db.listar('marcaciones', { eq: { empresa_id: estado.empresaId, anulada: false }, gte: { fecha_hora: dias[0] }, lte: { fecha_hora: C.isoDia(C.sumarDias(C.aFecha(dias[6]), 1)) + ' 23:59:59' } }));
     if (!marc) return;
     const hoy = hoyLocal();
     const tot = { prog: 0, lab: 0, tarde: 0, minTarde: 0, faltas: 0, sinProg: 0, antes: 0 };
+    const porArea = new Map();
     const filas = emps.map((e) => {
       const propias = marc.filter((m) => (m.empleado_id ? m.empleado_id === e.id : String(m.codigo_biometrico) === String(e.codigo_biometrico)));
       const { turnos } = C.emparejarMarcaciones(propias);
@@ -966,13 +982,19 @@
         const prog = horasProg(h), lab = ts.reduce((s, t) => s + t.minutos / 60, 0);
         const marcas = propias.filter((m) => m.fecha_hora.slice(0, 10) === d).length;
         sp += prog; sl += lab;
+        if (d <= hoy || prog) {
+          const k = areaDe(e, h) + '|' + d; const ag = porArea.get(k) || { prog: 0, lab: 0, pProg: 0, pLab: 0, faltas: 0, tarde: 0 };
+          ag.prog += prog; ag.lab += d <= hoy ? lab : 0; if (prog) ag.pProg++; if (lab > 0 && d <= hoy) ag.pLab++;
+          if (prog > 0 && !ts.length && !marcas && d < hoy) ag.faltas++;
+          porArea.set(k, ag);
+        }
         if (d > hoy) return { txt: prog ? `<span class="tenue">${h2(prog)} h prog.</span>` : '', cls: '' };
         const chips = [];
         if (prog > 0 && !ts.length && !marcas) { chips.push('<span class="chip chip-critico">Faltó</span>'); if (d < hoy) tot.faltas++; }
         else if (prog > 0) {
           const progIni = h.am_entrada || h.pm_entrada, progFin = h.pm_salida || h.am_salida;
           const primera = ts.length ? ts[0].entrada : (propias.find((m) => m.fecha_hora.slice(0, 10) === d) || {}).fecha_hora;
-          if (primera && progIni) { const t = minDe(primera) - (hDec(progIni) * 60); if (t > TOLERANCIA_MIN) { chips.push(`<span class="chip chip-aviso">Tarde ${Math.round(t)} min</span>`); tot.tarde++; tot.minTarde += t; } }
+          if (primera && progIni) { const t = minDe(primera) - (hDec(progIni) * 60); if (t > TOLERANCIA_MIN) { chips.push(`<span class="chip chip-aviso">Tarde ${Math.round(t)} min</span>`); tot.tarde++; tot.minTarde += t; const ag = porArea.get(areaDe(e, h) + '|' + d); if (ag) ag.tarde++; } }
           const ultima = ts.length ? ts[ts.length - 1].salida : null;
           if (ultima && progFin && ultima.slice(0, 10) === d) { const a = hDec(progFin) * 60 - minDe(ultima); if (a > TOLERANCIA_MIN && hDec(progFin) > hDec(progIni)) { chips.push(`<span class="chip chip-aviso">Salió ${Math.round(a)} min antes</span>`); tot.antes++; } }
           if (!ts.length && marcas) chips.push('<span class="chip chip-aviso">Marcación incompleta</span>');
@@ -986,15 +1008,33 @@
       tot.prog += sp; tot.lab += sl;
       return { e, celdas, sp, sl };
     }).filter((f) => f.sp > 0 || f.sl > 0);
-    cont.innerHTML = `
+    const resumenHtml = `
       <div class="resumen">
         <div class="cifra"><span class="eyebrow">Horas programadas</span><b>${h2(tot.prog)} h</b><small>semana completa</small></div>
         <div class="cifra"><span class="eyebrow">Horas laboradas</span><b>${h2(tot.lab)} h</b><small>${tot.prog ? Math.round((tot.lab / tot.prog) * 100) + ' % de lo programado' : 'sin programación'}</small></div>
         <div class="cifra"><span class="eyebrow">Llegadas tarde</span><b>${tot.tarde}</b><small>${tot.tarde ? `${Math.round(tot.minTarde / tot.tarde)} min en promedio · tolerancia ${TOLERANCIA_MIN} min` : `tolerancia ${TOLERANCIA_MIN} min`}</small></div>
         <div class="cifra"><span class="eyebrow">Faltas y novedades</span><b>${tot.faltas}</b><small>${tot.sinProg} días trabajados sin programar · ${tot.antes} salidas antes</small></div>
-      </div>
+      </div>`;
+    if (horModo === 'areas') {
+      const listaAreas = [...new Set([...porArea.keys()].map((k) => k.split('|')[0]))].sort((a, b) => ordenArea(a) - ordenArea(b));
+      const celda = (ag, d) => {
+        if (!ag) return '<td class="tenue">—</td>';
+        if (d > hoy) return `<td><span class="tenue">${h2(ag.prog)} h prog.</span><span class="sub">${ag.pProg} personas</span></td>`;
+        const dif = ag.lab - ag.prog; const pct = ag.prog ? Math.round((ag.lab / ag.prog) * 100) : null;
+        return `<td class="${pct !== null && pct < 85 ? 'celda-mal' : ''}"><span class="mono">${h2(ag.prog)} / ${h2(ag.lab)}</span><span class="sub ${dif < -0.25 ? 'neg' : dif > 0.25 ? 'pos' : ''}">${dif > 0 ? '+' : ''}${h2(dif)} h${pct !== null ? ` · ${pct} %` : ''}</span><span class="sub">${ag.pLab} de ${ag.pProg} ${ag.pProg === 1 ? 'persona' : 'personas'}</span>${ag.faltas ? `<span class="chip chip-critico">${ag.faltas} ${ag.faltas === 1 ? 'falta' : 'faltas'}</span>` : ''}${ag.tarde ? `<span class="chip chip-aviso">${ag.tarde} tarde</span>` : ''}</td>`;
+      };
+      const sumaDia = (d) => listaAreas.reduce((t, a) => { const ag = porArea.get(a + '|' + d); if (ag) { t.prog += ag.prog; t.lab += ag.lab; t.pProg += ag.pProg; t.pLab += ag.pLab; t.faltas += ag.faltas; t.tarde += ag.tarde; } return t; }, { prog: 0, lab: 0, pProg: 0, pLab: 0, faltas: 0, tarde: 0 });
+      const semanaArea = (a) => dias.reduce((t, d) => { const ag = porArea.get(a + '|' + d); if (ag) { t.prog += ag.prog; t.lab += ag.lab; } return t; }, { prog: 0, lab: 0 });
+      cont.innerHTML = resumenHtml + `
+      <p class="nota">Por área y por día: horas programadas / laboradas, diferencia, % cumplido y cuántas personas programadas marcaron. En rojo, las áreas que cumplieron menos del 85 %.</p>
+      <div class="tabla-envoltura"><table class="tabla tabla-horarios">${cabeza.replace('<th>Empleado</th>', '<th>Área</th>')}<tbody>${listaAreas.map((a) => { const sa = semanaArea(a); return `<tr><td><b>${esc(a)}</b></td>${dias.map((d) => celda(porArea.get(a + '|' + d), d)).join('')}<td class="num"><b>${h2(sa.prog)} / ${h2(sa.lab)}</b>${sa.prog ? `<span class="sub">${Math.round((sa.lab / sa.prog) * 100)} %</span>` : ''}</td></tr>`; }).join('')
+        || '<tr><td colspan="9" class="tenue">No hay horarios ni marcaciones esta semana. Asigna el área a cada persona en Programación.</td></tr>'}</tbody>
+        ${listaAreas.length ? `<tfoot><tr><td>Total</td>${dias.map((d) => celda(sumaDia(d), d)).join('')}<td class="num">${h2(tot.prog)} / ${h2(tot.lab)}</td></tr></tfoot>` : ''}</table></div>`;
+      return;
+    }
+    cont.innerHTML = resumenHtml + `
       <p class="nota">En cada día: horas programadas / horas laboradas según el reloj, y la diferencia.</p>
-      <div class="tabla-envoltura"><table class="tabla tabla-horarios">${cabeza}<tbody>${filas.map((f) => `<tr><td>${esc(nombreEmpleado(f.e))}<span class="sub">Código ${esc(f.e.codigo_biometrico || '—')}</span></td>${f.celdas.map((c) => `<td class="${c.cls}">${c.txt}</td>`).join('')}<td class="num"><b>${h2(f.sp)} / ${h2(f.sl)}</b></td></tr>`).join('')
+      <div class="tabla-envoltura"><table class="tabla tabla-horarios">${cabeza}<tbody>${filasConGrupo(filas, (f) => `<tr><td>${esc(nombreEmpleado(f.e))}<span class="sub">Código ${esc(f.e.codigo_biometrico || '—')}</span></td>${f.celdas.map((c) => `<td class="${c.cls}">${c.txt}</td>`).join('')}<td class="num"><b>${h2(f.sp)} / ${h2(f.sl)}</b></td></tr>`, 9)
         || '<tr><td colspan="9" class="tenue">No hay horarios ni marcaciones esta semana. Programa los turnos en la pestaña Programación.</td></tr>'}</tbody></table></div>`;
   }
 
@@ -1006,12 +1046,13 @@
         { nombre: 'estado', etiqueta: 'Ese día', tipo: 'select', opciones: ESTADOS_HOR, ancho: true },
         { nombre: 'am_entrada', etiqueta: 'Primer turno: entra', tipo: 'time' }, { nombre: 'am_salida', etiqueta: 'Primer turno: sale', tipo: 'time' },
         { nombre: 'pm_entrada', etiqueta: 'Segundo turno: entra', tipo: 'time' }, { nombre: 'pm_salida', etiqueta: 'Segundo turno: sale', tipo: 'time' },
-        { nombre: 'funcion', etiqueta: 'Función o puesto (ej. Caja, Manga, Host)', ancho: true },
+        { nombre: 'funcion', etiqueta: 'Función o puesto (ej. Caja, Manga, Host)' },
+        { nombre: 'area', etiqueta: 'Área ese día', tipo: 'select', opciones: [['', `La de la persona (${e.area || 'sin área'})`], ...areasEmpresa().map((a) => [a, a])] },
         { nombre: 'repetir', etiqueta: 'Poner este mismo horario en los días de esta semana que aún no tienen', tipo: 'check', ancho: true },
       ],
       valores: v,
       alGuardar: async (d) => {
-        const fila = { estado: d.estado || 'trabaja', am_entrada: d.am_entrada, am_salida: d.am_salida, pm_entrada: d.pm_entrada, pm_salida: d.pm_salida, funcion: d.funcion };
+        const fila = { estado: d.estado || 'trabaja', am_entrada: d.am_entrada, am_salida: d.am_salida, pm_entrada: d.pm_entrada, pm_salida: d.pm_salida, funcion: d.funcion, area: d.area || null };
         if (fila.estado === 'trabaja') {
           if (!(fila.am_entrada && fila.am_salida) && !(fila.pm_entrada && fila.pm_salida)) throw new Error('Pon al menos un turno con hora de entrada y de salida, o elige Descanso.');
           if ((fila.am_entrada && !fila.am_salida) || (!fila.am_entrada && fila.am_salida) || (fila.pm_entrada && !fila.pm_salida) || (!fila.pm_entrada && fila.pm_salida)) throw new Error('Cada turno necesita hora de entrada y de salida.');
@@ -1032,6 +1073,7 @@
   $('#hor-ant').addEventListener('click', () => moverSemana(-1));
   $('#hor-sig').addEventListener('click', () => moverSemana(1));
   $('#hor-semana').addEventListener('change', () => pintarHorarios());
+  $('#hor-area').addEventListener('change', () => pintarHorarios());
   $$('#hor-modos button').forEach((b) => b.addEventListener('click', () => { horModo = b.dataset.modo; pintarHorarios(); }));
   $('#hor-copiar').addEventListener('click', () => intentar(async () => {
     const ini = lunesDe($('#hor-semana').value || hoyLocal());
@@ -1042,7 +1084,7 @@
     ]);
     if (!ant.length) { aviso('La semana anterior no tiene horarios para copiar.'); return; }
     const ya = new Set(act.map((h) => h.empleado_id + '|' + h.fecha));
-    const nuevos = ant.map((h) => ({ empresa_id: h.empresa_id, empleado_id: h.empleado_id, fecha: C.isoDia(C.sumarDias(C.aFecha(h.fecha), 7)), estado: h.estado, am_entrada: h.am_entrada, am_salida: h.am_salida, pm_entrada: h.pm_entrada, pm_salida: h.pm_salida, funcion: h.funcion }))
+    const nuevos = ant.map((h) => ({ empresa_id: h.empresa_id, empleado_id: h.empleado_id, fecha: C.isoDia(C.sumarDias(C.aFecha(h.fecha), 7)), estado: h.estado, am_entrada: h.am_entrada, am_salida: h.am_salida, pm_entrada: h.pm_entrada, pm_salida: h.pm_salida, funcion: h.funcion, area: h.area }))
       .filter((h) => !ya.has(h.empleado_id + '|' + h.fecha));
     if (nuevos.length) await db.insertar('horarios', nuevos);
     aviso(`${nuevos.length} turnos copiados de la semana anterior`); pintarHorarios();

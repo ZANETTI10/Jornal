@@ -274,7 +274,10 @@ select:disabled { opacity: 1; background: transparent !important; border-color: 
 .tabla-horarios .sub.neg { color: var(--critico); }
 .tabla-horarios .sub.pos { color: var(--ok); }
 .tabla-horarios td.celda-mal { background: var(--critico-suave); }
-#hor-modos { margin-top: -4px; }
+#hor-modos { margin-top: -4px; align-items: center; }
+.subnav-etiqueta { color: var(--tinta-suave); font-size: 0.82rem; padding: 0 4px 0 10px; }
+.fila-grupo td { background: var(--superficie-3); color: var(--sello-fuerte); font: 600 0.82rem var(--fuente); padding: 6px 10px; }
+.sel-area { margin-top: 6px; min-height: 32px; padding: 3px 8px; font-size: 0.8rem; width: auto; max-width: 170px; }
 
 /* ---------- 8. Usuarios, festivos, diálogo y aviso ---------- */
 .form-invitar { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
