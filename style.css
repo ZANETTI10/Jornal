@@ -254,7 +254,9 @@ select:disabled { opacity: 1; background: transparent !important; border-color: 
 .vivo-personas { display: flex; flex-wrap: wrap; gap: 6px; }
 .vivo-ultimas { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; font-size: 0.92rem; }
 .vivo-ultimas .mono { color: var(--sello-fuerte); margin-right: 6px; }
-.buscador { flex: 1 1 240px; max-width: 380px; margin-left: auto; }
+.buscador { flex: 1 1 240px; max-width: 340px; }
+.filtro-emp { flex: 0 1 240px; margin-left: auto; }
+.alerta-info { background: var(--superficie-2); color: var(--tinta); border-left-color: var(--sello); }
 .encabezado-vista h2 small { font: 400 0.85rem var(--fuente); margin-left: 6px; }
 .oculto { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 

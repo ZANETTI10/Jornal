@@ -8,7 +8,7 @@
 <meta name="theme-color" content="#111823">
 <title>Jornal</title>
 <link rel="preload" href="sora.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="style.css?v=20261022a">
+<link rel="stylesheet" href="style.css?v=20261022b">
 </head>
 <body>
 <!--CUERPO-->
@@ -138,6 +138,7 @@
     <!-- EMPLEADOS -->
     <section id="vista-empleados" class="vista" hidden>
       <div class="encabezado-vista"><h2>Empleados <small id="cuenta-empleados" class="tenue"></small></h2>
+        <div class="filtro-emp"><label for="filtro-empleados" class="oculto">Mostrar</label><select id="filtro-empleados"><option value="nomina">En nómina</option><option value="asistencia">Solo asistencia (no están en nómina)</option><option value="todos">Todos</option></select></div>
         <div class="buscador"><label for="buscar-empleado" class="oculto">Buscar empleado</label><input id="buscar-empleado" type="search" placeholder="Buscar por nombre, cédula o código" autocomplete="off"></div>
         <button id="btn-nuevo-empleado" class="btn btn-primario" type="button">Agregar empleado</button></div>
       <div class="tabla-envoltura"><table id="tabla-empleados" class="tabla"></table></div>
@@ -202,9 +203,9 @@
 <!--/CUERPO-->
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.min.js"></script>
-<script src="config.js?v=20261022a"></script>
-<script src="calculo.js?v=20261022a"></script>
-<script src="datos.js?v=20261022a"></script>
-<script src="app.js?v=20261022a"></script>
+<script src="config.js?v=20261022b"></script>
+<script src="calculo.js?v=20261022b"></script>
+<script src="datos.js?v=20261022b"></script>
+<script src="app.js?v=20261022b"></script>
 </body>
 </html>

@@ -258,7 +258,7 @@
       db.listar('marcaciones', { eq: { empresa_id: empresa.id, anulada: false }, gte: { fecha_hora: margenIni }, lte: { fecha_hora: margenFin } }),
       db.listar('novedades', { eq: { empresa_id: empresa.id }, gte: { fecha: r.inicio }, lte: { fecha: r.fin } }),
     ]);
-    const empleados = estado.empleados.filter((e) => e.activo !== false || (e.fecha_retiro && e.fecha_retiro >= r.inicio));
+    const empleados = estado.empleados.filter((e) => e.en_nomina !== false && (e.activo !== false || (e.fecha_retiro && e.fecha_retiro >= r.inicio)));
     const liquidacion = C.liquidarPeriodo({ empresa, empleados, marcaciones, novedades, parametros: estado.parametros, inicio: r.inicio, fin: r.fin });
     return { periodo, liquidacion, marcaciones };
   }
@@ -410,7 +410,8 @@
     const hayAnterior = a.diasConDatos >= a.diasCal / 2;
     const sinComparar = a.diasConDatos ? 'el periodo anterior está incompleto' : 'sin datos del periodo anterior';
     const d = (act, ant, menos) => (hayAnterior ? delta(act, ant, menos) : `<small class="tenue">${sinComparar}</small>`);
-    const fichas = estado.empleados.filter((e) => String(e.documento).startsWith('ZK-')).length;
+    const fichas = estado.empleados.filter((e) => e.en_nomina !== false && e.activo !== false && String(e.documento).startsWith('ZK-')).length;
+    const soloAsistencia = estado.empleados.filter((e) => e.en_nomina === false && e.activo !== false).length;
     const sinMarcas = E.filter((e) => !e.detalleDias.length);
     const cerrado = res.periodo && res.periodo.estado === 'cerrado';
     const extras = (e) => EXT.reduce((s, c) => s + e.horas[c], 0);
@@ -458,7 +459,8 @@
       m.diasSobreTope && `<div class="alerta"><strong>${m.diasSobreTope}</strong> jornadas con más de ${TOPE_EXTRA_DIA} horas extra en el día (${m.sobreDia.length} personas): ${lista(m.sobreDia)}.</div>`,
       m.porRevisar && `<div class="alerta"><strong>${m.porRevisar}</strong> marcaciones sin pareja. Mientras no se corrijan, esas horas no se pagan. <button class="btn btn-mini" data-ir="asistencia" type="button">Revisar en Asistencia</button></div>`,
       sinMarcas.length && `<div class="alerta alerta-critica"><strong>${sinMarcas.length}</strong> ${sinMarcas.length === 1 ? 'empleado no marcó' : 'empleados no marcaron'} ni una vez en el periodo, pero se les liquida el salario completo: ${lista(sinMarcas.map((e) => e.nombre))}. Si ya no trabajan, ponles fecha de retiro. <button class="btn btn-mini" data-ir="empleados" type="button">Ir a Empleados</button></div>`,
-      fichas && `<div class="alerta"><strong>${fichas}</strong> empleados con ficha incompleta: las cifras en pesos usan el salario mínimo provisional. <button class="btn btn-mini" data-ir="empleados" type="button">Completar fichas</button></div>`,
+      soloAsistencia && `<div class="alerta alerta-info"><strong>${soloAsistencia}</strong> personas marcan en el reloj pero no están en la nómina: se ven en Asistencia y no se les liquida salario. <button class="btn btn-mini" data-ir="empleados" type="button">Ver en Empleados</button></div>`,
+      fichas && `<div class="alerta"><strong>${fichas}</strong> empleados sin cédula registrada (llegaron del reloj). Su salario se toma como está en la ficha; complétales cédula y fecha de ingreso antes de pagar. <button class="btn btn-mini" data-ir="empleados" type="button">Completar fichas</button></div>`,
     ].filter(Boolean).join('') || '<p class="nota">Sin alertas en este periodo.</p>';
 
     cont.innerHTML = `
@@ -851,19 +853,22 @@
     { nombre: 'arl_riesgo', etiqueta: 'Riesgo ARL', tipo: 'select', opciones: [[1, 'I · 0,522 %'], [2, 'II · 1,044 %'], [3, 'III · 2,436 %'], [4, 'IV · 4,35 %'], [5, 'V · 6,96 %']] },
     { nombre: 'eps', etiqueta: 'EPS' }, { nombre: 'afp', etiqueta: 'Fondo de pensiones' }, { nombre: 'ccf', etiqueta: 'Caja de compensación' },
     { nombre: 'auxilio_transporte', etiqueta: 'Recibe auxilio de transporte (si gana hasta 2 SMMLV)', tipo: 'check', defecto: true, ancho: true },
+    { nombre: 'en_nomina', etiqueta: 'Está en la nómina (se le liquida salario)', tipo: 'check', defecto: true, ancho: true },
     { nombre: 'activo', etiqueta: 'Activo', tipo: 'check', defecto: true },
   ];
   function pintarEmpleados() {
     const t = $('#tabla-empleados');
     if (!estado.empresaId) { t.innerHTML = '<tbody><tr><td class="tenue">Agrega primero una empresa.</td></tr></tbody>'; return; }
     const q = buscable($('#buscar-empleado') ? $('#buscar-empleado').value : '');
+    const vista = $('#filtro-empleados') ? $('#filtro-empleados').value : 'nomina';
     const lista = estado.empleados
+      .filter((e) => vista === 'todos' || (vista === 'nomina' ? e.en_nomina !== false : e.en_nomina === false))
       .filter((e) => !q || buscable(`${nombreEmpleado(e)} ${e.documento} ${e.codigo_biometrico || ''} ${e.cargo || ''}`).includes(q))
       .sort((a, b) => (nombreProvisional(a) - nombreProvisional(b)) || (a.activo === false) - (b.activo === false)
         || (nombreProvisional(a) ? (+a.codigo_biometrico || 0) - (+b.codigo_biometrico || 0) : nombreEmpleado(a).localeCompare(nombreEmpleado(b))));
     $('#cuenta-empleados').textContent = `${lista.length} de ${estado.empleados.length}`;
     t.innerHTML = `<thead><tr><th>Empleado</th><th>Cédula</th><th class="num">Salario</th><th>Ingreso</th><th>Código reloj</th><th>Estado</th></tr></thead><tbody>${
-      lista.map((e) => `<tr class="clic" data-id="${e.id}"><td>${esc(nombreEmpleado(e))}<span class="sub">${esc(e.cargo || '')}</span></td><td class="mono">${esc(e.documento)}</td><td class="num">${$f(e.salario)}${e.tipo_salario === 'integral' ? '<span class="sub">integral</span>' : ''}</td><td class="mono">${esc(e.fecha_ingreso)}</td><td class="mono">${esc(e.codigo_biometrico || '—')}</td><td>${e.activo === false ? '<span class="chip">Retirado</span>' : nombreProvisional(e) ? '<span class="chip chip-aviso">Sin nombre</span>' : String(e.documento).startsWith('ZK-') ? '<span class="chip chip-aviso">Completar ficha</span>' : '<span class="chip chip-ok">Activo</span>'}</td></tr>`).join('')
+      lista.map((e) => `<tr class="clic" data-id="${e.id}"><td>${esc(nombreEmpleado(e))}<span class="sub">${esc(e.cargo || '')}</span></td><td class="mono">${esc(e.documento)}</td><td class="num">${$f(e.salario)}${e.tipo_salario === 'integral' ? '<span class="sub">integral</span>' : ''}</td><td class="mono">${esc(e.fecha_ingreso)}</td><td class="mono">${esc(e.codigo_biometrico || '—')}</td><td>${e.activo === false ? '<span class="chip">Retirado</span>' : e.en_nomina === false ? '<span class="chip">Solo asistencia</span>' : nombreProvisional(e) ? '<span class="chip chip-aviso">Sin nombre</span>' : String(e.documento).startsWith('ZK-') ? '<span class="chip chip-aviso">Completar ficha</span>' : '<span class="chip chip-ok">Activo</span>'}</td></tr>`).join('')
       || `<tr><td colspan="6" class="tenue">${q ? 'Nadie coincide con la búsqueda.' : 'Esta empresa no tiene empleados todavía.'}</td></tr>`}</tbody>`;
     t.querySelectorAll('tr.clic').forEach((tr) => tr.addEventListener('click', () => editarEmpleado(estado.empleados.find((e) => e.id === tr.dataset.id))));
   }
@@ -881,6 +886,7 @@
     });
   }
   $('#buscar-empleado').addEventListener('input', () => pintarEmpleados());
+  $('#filtro-empleados').addEventListener('change', () => pintarEmpleados());
   $('#btn-nuevo-empleado').addEventListener('click', () => { if (!estado.empresaId) { aviso('Agrega primero una empresa.'); return; } editarEmpleado(null); });
 
   // ------------------------------------------------------------------
